@@ -38,8 +38,8 @@ extract: fetch
 stage: extract
 	python3 scripts/make_comfyui_stage.py
 
-# ── ④ rust 扩展重编译（thirdparty/ submodule 源码; 产物 sha 与 prebuilt 锚比对）──
-rust:
+# ── ④ rust 扩展重编译（thirdparty/ submodule 源码; 需 skh 树提供系统 libc++.so.1(__1) 链接）──
+rust: extract
 	bash scripts/build_rust_exts.sh
 
 # ── ⑤ python312.zip（stage + skh stdlib → rawfile; manifest 锚）──

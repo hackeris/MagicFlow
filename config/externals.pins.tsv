@@ -12,7 +12,7 @@ comfyui-frontend-index.html	md5	-	61a69562c29975642b296c553cd96d32	-	前端 dist
 
 comfyui-src	git	https://github.com/comfyanonymous/ComfyUI.git	03468f4	-	commit=03468f4;clone 后 checkout,再 git apply --check patches/comfyui-src-ohos-changes.patch;apply 后 seedvr/model.py 须含 _dynamo_disable 证据串(见 fetch 脚本校验)
 
-python312.zip	anchor	-	d1930ac2da366ad1056887e0a48e7b1b03d949bca068a6dfce20dc955793cccf	151675300	2026-09-03 既有产物+sha256+字节(重建后须与之一致;make_py312_zip.py 做条目三锚校验)
+python312.zip	anchor	-	c85acd6304052d3a255bd435af8ef71d39ba9fdbf82540b0e68a4521b6dafb68	151213981	2026-09-03 run86 定锚:zip=28080 条(sorted_namelist sha 8523f5e4...),重建后须与之一致;make_py312_zip.py 做条目三锚校验。历史锚 d1930ac2(=151,675,300B/28,087 条,run18 era)因 run86 torch 注入 + aiohttp 生态补齐而失效,留档
 
 pydantic_core-aarch64-musl.whl	url	https://pypi.org/packages/py3/p/pydantic-core/pydantic_core-2.46.5-cp312-cp312-musllinux_1_1_aarch64.whl	efd62a42486f1bda5d24cb4f63d15a3c7768375fe83d36f9417b4ad7a2fb20b3	2158408	pydantic_core Rust 内核(PyPI musllinux_1_1_aarch64,matching skh 栈);解包出 _pydantic_core...musl.so + .libs/libgcc_s-0bf60adc.so.1 走 prebuilt;本地副本 /tmp/wheels/pydantic_core-2.46.5-cp312-cp312-musllinux_1_1_aarch64.whl
 

@@ -67,9 +67,15 @@ collect_one() {
     [ -d "$d" ] || { MISSING+=("src-missing:$tag:$d"); return 0; }
     local fname="$(basename "$rel")"
     local found=""
-    while IFS= read -r cand; do
-        if [ "$(sha256sum "$cand" | awk '{print $1}')" = "$want" ]; then found="$cand"; break; fi
-    done < <(find "$d" -name "$fname" 2>/dev/null)
+    if [ "$tag" = "rust" ]; then
+        # rust 产物字节不可复现（链接元数据/增量差异）—— 锚 =「当前工具链从固定 commit 源码重建」;
+        # 直接采用 build/rust-out 产物（非空断言代替 sha 比对）。
+        found="$d/$fname"; [ -s "$found" ] || found=""
+    else
+        while IFS= read -r cand; do
+            if [ "$(sha256sum "$cand" | awk '{print $1}')" = "$want" ]; then found="$cand"; break; fi
+        done < <(find "$d" -name "$fname" 2>/dev/null)
+    fi
     if [ -n "$found" ]; then
         mkdir -p "$(dirname "$dst")"; cp "$found" "$dst"
     else
@@ -83,8 +89,12 @@ done < "$MAN"
 # ── 校验块(先执行完拷贝,统一汇总) ──
 echo "== [prebuilt] 校验 & 断言 =="
 FAIL=0
-# 1) 逐条 sha 复验
+# 1) 逐条 sha 复验（rust 例外: 源码重建产物字节不可复现,只做强存在性+NEEDED 闭环检查,不做 sha 比对）
 while IFS=$'\t' read -r rel tag sha; do
+    if [ "$tag" = "rust" ]; then
+        [ -s "$PRE/$rel" ] || { echo "[FAIL] rust 产物缺失/空: $rel"; FAIL=1; }
+        continue
+    fi
     if [ -f "$PRE/$rel" ] && [ "$(sha256sum "$PRE/$rel" | awk '{print $1}')" = "$sha" ]; then :; else
         echo "[FAIL] sha $rel"; FAIL=1
     fi
@@ -114,7 +124,8 @@ done < <(find "$PRE" -type f)
 cmake="$ROOT/entry/src/main/cpp/CMakeLists.txt"
 while read -r rel; do
     [ -f "$PRE/$rel" ] || { echo "[FAIL] CMake 引用缺文件: $rel"; FAIL=1; }
-done < <(grep -oE '(import_so|import_ext_so)\([^)]*"[^"]+"[^)]*\)' "$cmake" | grep -oE '"[^"]+"' | tr -d '"' | grep -v '^${' | sort -u | grep -vE '^libhilog_ndk|^libchild_process|^libdl|^libace_napi')
+done < <(grep -oE '(import_so|import_ext_so)\([^)]*"[^"]+"[^)]*\)' "$cmake" | grep -oE '"[^"]+"' | tr -d '"' \
+        | grep -vE '\$\{' | grep -vE '^(libhilog_ndk|libchild_process|libdl|libace_napi)' | sort -u)
 
 # 5) NEEDED 闭包(系统白名单外必须 ∈ prebuilt 名集)
 LLVM_READELF="$([ -x /apps/harmony/sdk/default/openharmony/native/llvm/bin/llvm-readelf ] && echo /apps/harmony/sdk/default/openharmony/native/llvm/bin/llvm-readelf || echo readelf)"

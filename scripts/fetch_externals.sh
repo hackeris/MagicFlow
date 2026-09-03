@@ -36,9 +36,22 @@ die()  { echo -e "\033[31m[FETCH:ERROR]\033[0m $*" >&2; exit 1; }
 sha_of() { sha256sum "$1" | awk '{print $1}'; }
 size_of() { stat -c %s "$1"; }
 
-# pin 表读取:pin_get <name> <col>（col: url/sha256/size/type/note）
+# pin 表读取:pin_get <name> <col>（col: type/url/sha256/size/note; col 号=该列序号）
+# 注: awk -F'\t' 转义在不同 awk 实现不可靠,用 python 读制表符列
 pin_get() {
-    awk -F'\t' -v n="$1" -v c="$2" 'NR>1 && $1==n {print $c; exit}' "$PINS"
+    python3 - "$1" "$2" "$PINS" <<'EOF'
+import sys
+name, colname, pins = sys.argv[1], sys.argv[2], sys.argv[3]
+COLS = {"type": 2, "url": 3, "sha256": 4, "size": 5, "note": 6}
+for line in open(pins, encoding="utf-8"):
+    line = line.rstrip("\n")
+    if not line or line.startswith("#"):
+        continue
+    f = line.split("\t")
+    if f[0] == name:
+        print(f[COLS[colname] - 1])
+        break
+EOF
 }
 SKH_SHA="$(pin_get skh-run.tar.gz sha256)";      SKH_SIZE="$(pin_get skh-run.tar.gz size)"
 FE_SHA="$(pin_get comfyui-frontend-dist.zip sha256)"; FE_SIZE="$(pin_get comfyui-frontend-dist.zip size)"
@@ -149,7 +162,9 @@ fetch_pysite() {
     log "④ 纯 py 依赖集（venv-requirements-port.txt 驱动）"
     [ -f "$PY_REQ" ] || die "④ 缺 scripts/venv-requirements-port.txt（S4 产物，需先行）"
     [ "$OFFLINE" = 1 ] || {
-        if [ ! -f "$EXT/wheels/host/.complete" ]; then
+        # requirements 变更(mtime 新于完成戳)即重 download —— 防旧缓存缺新包
+        if [ ! -f "$EXT/wheels/host/.complete" ] || \
+           [ "$(stat -c %Y "$PY_REQ")" -gt "$(stat -c %Y "$EXT/wheels/host/.complete")" ]; then
             log "  pip download → externals/wheels/host/"
             rm -rf "$EXT/wheels/host"; mkdir -p "$EXT/wheels/host"
             python3 -m pip download -q --no-deps -r "$PY_REQ" -d "$EXT/wheels/host" \
@@ -159,8 +174,10 @@ fetch_pysite() {
         fi
     }
     # 干净重建 target（防增量漂移）
+    # --no-deps: requirements 是精确全集(含所有传递依赖), 不做依赖树解析——
+    #   否则 pip 会要求 typing-extensions 等"我们刻意不收集"的包(其由 skh 树提供)
     rm -rf "$EXT/py-site"; mkdir -p "$EXT/py-site"
-    python3 -m pip install -q --no-index --find-links "$EXT/wheels/host" --find-links "$VENDOR_WHEELS" \
+    python3 -m pip install -q --no-index --no-deps --find-links "$EXT/wheels/host" --find-links "$VENDOR_WHEELS" \
         --target "$EXT/py-site" -r "$PY_REQ" \
       || die "④ pip install --target 失败"
     # 防呆:psutil/regex 绝不能混入（psutil 走 stub/psutil.py 注入；regex 有 C 扩展依赖,收纯 py 会带崩）
@@ -180,6 +197,7 @@ fetch_pydantic_wheel() {
     if check_file "$WH" "$SHA" "$SIZE" 2>/dev/null && [ -f "$EXT/pc-wheel-extract/pydantic_core/_pydantic_core.cpython-312-aarch64-linux-musl.so" ]; then
         log "  [SKIP]"; return
     fi
+    mkdir -p "$EXT/wheels-aarch64"
     if [ -f /tmp/wheels/pydantic_core-2.46.5-cp312-cp312-musllinux_1_1_aarch64.whl ]; then
         cp /tmp/wheels/pydantic_core-2.46.5-cp312-cp312-musllinux_1_1_aarch64.whl "$WH.part" && mv "$WH.part" "$WH"
     else

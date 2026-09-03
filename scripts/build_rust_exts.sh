@@ -36,8 +36,14 @@ mkdir -p "$OUT_DIR"
 
 # cargo 会从子模块工作树读 .cargo/config.toml(镜像源 + OHOS linker);
 # 子模块工作树在这个 untracked 目录不污染其 gitlink 状态(只记 commit)。
+# ⚠ libc++ 必选「系统 __1」(skh 树 usr/lib/libc++.so.1)：
+#   SDK 的 clang++ 默认 -lc++ 解析到 native 的 libc++_shared.so(⇒std::__n1)——
+#   与真实 torch 栈(必链 libc++.so.1 ⇒ std::__1)同进程双 libc++ 即命门③冲突。
+#   故 link-arg 追加 -L skh usr/lib + -l:libc++.so.1（同名后到优先,DT_NEEDED=libc++.so.1）。
 cargo_cfg() {
     local sub="$1"
+    local SYSLIB="$ROOT/build/skh-run-extract/skh-run/usr/lib"
+    [ -f "$SYSLIB/libc++.so.1" ] || { echo "[RUST] 缺 skh 系统 libc++: $SYSLIB/libc++.so.1（先 make extract/source? 本脚本需 build/skh-run-extract 就绪）"; exit 1; }
     mkdir -p "$sub/.cargo"
     cat > "$sub/.cargo/config.toml" <<EOF
 [source.crates-io]
@@ -46,12 +52,17 @@ replace-with = 'mirror'
 registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
 [target.aarch64-unknown-linux-ohos]
 linker = "$CLANGXX"
+rustflags = ["-C", "link-arg=-L$SYSLIB",
+             "-C", "link-arg=-l:libc++.so.1",
+             "-C", "link-arg=-l:libc++abi.so.1",
+             "-C", "link-arg=-l:libunwind.so.1"]
 EOF
 }
 
 export CC_aarch64_unknown_linux_ohos="$CLANG"
 export CXX_aarch64_unknown_linux_ohos="$CLANGXX"
-export CARGO_TARGET_DIR=/tmp/rust-ext-target-oci   # 共享:两次构建复用依赖编译缓存
+# 共享依赖编译缓存(两 crate 复用);环境变量可覆盖
+export CARGO_TARGET_DIR="${RUST_EXT_TARGET_DIR:-/tmp/rust-ext-target}"
 
 log() { echo -e "\033[32m[RUST]\033[0m $*" >&2; }
 
@@ -74,7 +85,10 @@ build_safetensors() {
     [ -f "$sub/bindings/python/Cargo.toml" ] || { echo "[RUST] submodule 未检出 thirdparty/safetensors(git submodule update --init)"; exit 1; }
     log "safetensors @ $(git -C "$sub" rev-parse --short HEAD)"
     cargo_cfg "$sub"
-    ( cd "$sub/bindings/python" && cargo build --release --target aarch64-unknown-linux-ohos --quiet )
+    # safetensors 的 Cargo.toml 无 [features] 段 → pyo3 默认链 libpython3.10;
+    # 用 cargo 「依赖/feature」语法直传 pyo3/extension-module 使扩展不链 libpython。
+    ( cd "$sub/bindings/python" && cargo build --release --target aarch64-unknown-linux-ohos --quiet \
+        --features pyo3/extension-module )
     local so="$CARGO_TARGET_DIR/aarch64-unknown-linux-ohos/release/libsafetensors_rust.so"
     [ -f "$so" ] || { echo "[RUST] 产物缺失: $so"; exit 1; }
     cp "$so" "$OUT_DIR/_safetensors_rust.abi3.so"

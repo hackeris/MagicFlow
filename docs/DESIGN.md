@@ -79,7 +79,7 @@ comfyui_version 0.34.x）；ArkWeb 前端接通（官方 ComfyUI_frontend v1.54.
 ```
 fetch(外部输入 sha256 锚) → extract(skh 解包=唯一数据源契约) →
   stage(comfy 源码+patch+纯 py 依赖+官方前端, fail-fast) |
-  zip(python312.zip 三锚:151,675,300B/28,087 条/sorted-namelist) |
+  zip(python312.zip 三锚:151,213,981B/28,080 条/sorted-namelist) |
   rust(submodule 源码编译两个 Rust 扩展, 产物 sha 与锚比对) |
   prebuilt(清单驱动 324 文件, sha/计数/NEEDED 闭包/死文件断言) →
   hap(hvigor 官方原版, libs/arm64-v8a == 236 元锚) → install/verify-device(真机 CF-OK-8188)
@@ -96,11 +96,11 @@ fetch(外部输入 sha256 锚) → extract(skh 解包=唯一数据源契约) →
 
 | 资源 | 版本/锚 |
 |---|---|
-| skh-run.tar.gz | LFS `d6d6bfcfea…25406`（sha256 全值）, 544,835,856B；= Python 3.12.7 + PyTorch 2.10.0 + 环境自带 site-packages（含 aiohttp） |
+| skh-run.tar.gz | LFS `d6d6bfcfea…25406`（sha256 全值）, 544,835,856B；= Python 3.12.7 + PyTorch 2.10.0 + 环境自带 site-packages（**不含 aiohttp 生态**,由本链自补,见下一行） |
 | ComfyUI_frontend | v1.54.1; dist.zip sha256 `a89cf5e8…248806`, 24,601,619B; index.html md5 `61a69562c29975642b296c553cd96d32` |
 | ComfyUI 源码 | `03468f4`（workflow templates v0.11.52 #16024）+ `patches/comfyui-src-ohos-changes.patch`（551 行/349+/84-） |
-| 纯 py 依赖 30 包 | `scripts/venv-requirements-port.txt`（导出自 hostcv venv dist-info：pydantic 2.13.5/sqlalchemy 2.0.52/transformers 5.16.1 等；私有 comfy-kitchen 0.2.31/comfy-aimdo 0.4.15 = vendor wheel 入库） |
-| python312.zip | 151,675,300B / 28,087 条 / manifest 逐条目 sha256（`docs/manifests/`） |
+| 纯 py 依赖 | `scripts/venv-requirements-port.txt`（pydantic 2.13.5/sqlalchemy 2.0.52/transformers 5.16.1 等；私有 comfy-kitchen 0.2.31/comfy-aimdo 0.4.15 = vendor wheel 入库）。其中 aiohttp 生态 9 盒（aiohttp 3.14.3/multidict 6.7.1/propcache 0.5.2/yarl 1.24.5/frozenlist 1.8.0/aiohappyeyeballs/aiosignal/attrs+attr/idna）为 **server.py 启动硬链**——skh 标准 tar 不含,需自 pypi 收（C 加速 .so 被滤,各包自动回退纯 py,与旧 zip run18 形态一致） |
+| python312.zip | 151,213,981B / 28,080 条 / manifest 逐条目 sha256（`docs/manifests/`） |
 | pydantic_core | 2.46.5 musllinux_1_1_aarch64 wheel sha `efd62a42…`, 2,158,408B（解包出 `_pydantic_core…musl.so` + `.libs/libgcc_s-0bf60adc.so.1`） |
 | Rust 扩展 | tokenizers @7f1623b(v0.23.1)/safetensors @a406ca3（thirdparty/ submodule, cargo 交叉编译产物 sha 即锚；旧手工产物已弃） |
 | 工具链基线 | CLT 6.1.1.280 / hvigor 6.24.2(官方原版) / SDK 6.1.1 API24 / hdc 3.2.0d / rustc 1.98.0（target `aarch64-unknown-linux-ohos` 已装） |

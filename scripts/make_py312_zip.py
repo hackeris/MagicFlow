@@ -35,6 +35,20 @@ def _stub_ok(rel):
     return os.path.join("build/stub", rel)
 
 
+def _torch_init_has_shortname(zip_path):
+    """run86 校验：zip 内 torch/__init__.py 必须为「已注入 _load_global_deps 短名」形态
+    （锚注释占位 + global_deps_lib_path = lib_name）。丢失即真机 import torch 必死，
+    曾在重打 zip 时丢过一次（注入不可静默缺失）。"""
+    try:
+        import zipfile as _zf
+        with _zf.ZipFile(zip_path) as _z:
+            _d = _z.read("lib/python3.12/site-packages/torch/__init__.py").decode("utf-8")
+    except Exception:
+        return False
+    return ("global_deps_lib_path = lib_name" in _d
+            and "loader 只认 HAP libs/" in _d)
+
+
 SITECUSTOMIZE_SRC = os.path.join(ROOT, _stub_ok("sitecustomize_tpl.py"))
 
 # 不打包的目录名（命中即整目录跳过）
@@ -425,6 +439,34 @@ def main():
                             #   dist-info）整树不写，stage 段新版唯一落盘 → zipimport
                             #   无首份歧义、metadata 不再读到旧版本号、零版本漂移
                             continue
+                if rel == "site-packages/torch/__init__.py":
+                    # run86 — torch._load_global_deps 注入（2026-09-03 真机死点定谳）：
+                    #   官方原版对 global_deps_lib_path 用「site-packages 同目录」绝对路径
+                    #   （dlopen(filesDir 旁路文件)）——而 .so 一律只随 HAP 进 libs/<abi>/
+                    #   （铁律），该路径设备上不存在 → CDLL OSError → torch import 炸。
+                    #   run18 时代研究区 zip 曾是短名形态（global_deps_lib_path = lib_name，
+                    #   loader 短名命中 bundle libs/arm64 的 libtorch_global_deps.so），
+                    #   重打 zip 时丢失 → 必须在此恢复。锚 = 官方原版该行文本（失效即报错，
+                    #   防版本漂移出真死点）。
+                    with open(full, encoding="utf-8") as _df:
+                        _tc = _df.read()
+                    _OLD = '    global_deps_lib_path = os.path.join(os.path.dirname(here), "lib", lib_name)'
+                    _NEW = ('    # ★ OHOS 移植：loader 只认 HAP libs/ 下的路径（filesDir 的 '
+                            'dlopen 一律 "No error information"）。\n'
+                            '    #   该库已随 HAP 打进 libs/arm64（同名 SONAME）→ 用短名加载，'
+                            '命中 bundle libs。\n'
+                            '    global_deps_lib_path = lib_name')
+                    if _OLD in _tc and _tc.count(_OLD) == 1:
+                        _nc = _tc.replace(_OLD, _NEW)
+                        # ⚠ 此处不可用 arc —— 本分支在 arc 赋值之前(arc 仍是上一文件的路径!)
+                        z.writestr(f"{PREFIX}/{rel}", _nc)
+                        count += 1
+                        total += len(_nc)
+                        print("  [PATCH] torch/__init__.py 已注入 _load_global_deps 短名加载（libs/ 命中）")
+                        continue
+                    print("  !! torch/__init__.py 未命中 _load_global_deps 注入锚（版本漂移? 必死点不可静默）",
+                          file=sys.stderr)
+                    return 2
                 arc = f"{PREFIX}/{rel}"
                 z.write(full, arc)
                 count += 1
@@ -597,6 +639,7 @@ def main():
             "run82-3 safetensors 仅 0.8.0":
                 f"{PREFIX}/site-packages/safetensors-0.8.0.dist-info/METADATA" in names,
             "torch/__init__.py": f"{PREFIX}/site-packages/torch/__init__.py" in names,
+            "run86 torch/_load_global_deps 短名注入(锚注释命中)": _torch_init_has_shortname(OUT),
             "run73 torchaudio 空壳(真树已剔除)": (
                 f"{PREFIX}/site-packages/torchaudio/__init__.py" in names
                 and sum(1 for n in names if n.startswith(

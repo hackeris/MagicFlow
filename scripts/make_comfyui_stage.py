@@ -58,6 +58,21 @@ TOP_PKGS = [
     "certifi",
     "idna",
     "charset_normalizer",
+    # run82-3 — aiohttp 生态（2026-09-03 正规化补齐：旧 zip 内含其 133 条/run18 达成;
+    #   标准 skh tar 不含,pypi 同版本(v=venv 实测)收纯 py —— attr/ 由 attrs wheel 自带）
+    "aiohttp",
+    "aiohappyeyeballs",
+    "aiosignal",
+    "attrs",
+    "attr",   # attrs wheel 同时发 attr/ 兼容目录（aiohttp/client.py:32 `import attr`）——
+               #   2026-09-03 真机死点实证:只收 attrs 时 import attr 直接 ModuleNotFoundError
+               #   （attrs 26.x 仍保双名发行;旧 zip 亦有 attr/ 14 条）
+    # 2026-09-03 真机 run 补齐（aiohttp 硬依赖; 缺 .so 时各包自动回退纯 py）:
+    #   multidict/propcache/yarl/frozenlist（版本见 venv-requirements-port.txt）
+    "multidict",
+    "propcache",
+    "yarl",
+    "frozenlist",
     # regex ⚠ 绝不收集：2026.9.3 _main.py:429 硬 import C 扩展 _regex（纯 py 不可用、
     #   仅 9 边缘文件用；若收纯 py 树不匹配 so，import regex 反而带崩主链）——由 zip 侧
     #   AUTODOC_STUB（transformers/utils/auto_docstring.py 空壳替换）绕开其唯一主链引用点。

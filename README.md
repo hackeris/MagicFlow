@@ -49,7 +49,7 @@ make fetch            # ① 外部输入→externals/(sha256 全校验,幂等;�
 make extract          # ② skh-run.tar.gz → build/skh-run-extract/（唯一数据源契约）
 make stage            # ③ ComfyUI 源码(+patch) + 纯 py 依赖 + 官方前端 → build/pyroot-stage/
 make rust             # ④ thirdparty/ submodule 源码 → build/rust-out/（两个 Rust 扩展,sha 与锚比对）
-make zip              # ⑤ stage+skh stdlib → rawfile/python312.zip（28,087 条/manifest 锚）
+make zip              # ⑤ stage+skh stdlib → rawfile/python312.zip（28,080 条/manifest 锚）
 make prebuilt         # ⑥ 清单驱动收集 → entry/src/main/cpp/prebuilt/（324 文件,sha/计数/NEEDED 闭环）
 make hap              # ⑦ hvigorw assembleHap → entry-default-signed.hap（libs/arm64-v8a == 236 元锚）
 make verify-device    # ⑧ 部署真机 + run_and_capture.sh 一轮观测（Cf-OK-8188 是达成证词）
@@ -100,7 +100,7 @@ File → Project Structure → Signing Configs → 自动签名（需华为账�
 | ComfyUI 03468f4 | github comfyanonymous/ComfyUI | commit `03468f4` + patch 应用 |
 | pydantic_core-2.46.5 musllinux_1_1_aarch64 wheel | pypi | sha `efd62a42…` |
 | 纯 py 依赖集 | pypi（pip download/install --target） | `scripts/venv-requirements-port.txt` |
-| python312.zip | 本链产物 | 151,675,300B / 28,087 条 / sorted-namelist 锚 |
+| python312.zip | 本链产物 | 151,213,981B / 28,080 条 / sorted-namelist 锚 |
 
 ### 工具链基线
 
@@ -109,7 +109,8 @@ CLT 6.1.1.280 / hvigor 6.24.2（**官方原版**，md5 `705309b0…`）/ SDK 6.1
 
 ## 4. 已知缺口（用了才炸）
 
-- 推理期功能：视频/av、部分 torchvision/scipy 算子、alembic 等 —— 均为惰性 import 点,主链不受影响；
+- 推理期功能：视频/av、部分 torchvision/scipy 算子、alembic 等 —— 均为惰性 import 点,主链不受影响
+  （alembic = comfy 远程 sqlite 历史同步用,启动仅打 warning;blake3 同理）；
 - 前端模板列表走远程,设备无外网时显示 0/0 为正常；
 - 模型权重（数十 GB）不进 HAP,当前为演示最小链；后续走资源包/云落 filesDir 方案。
 

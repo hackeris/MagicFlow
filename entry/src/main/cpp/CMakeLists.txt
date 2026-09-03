@@ -193,9 +193,36 @@ target_compile_options(comfy_child PRIVATE
     -fno-omit-frame-pointer)
 # -nostdlib++：禁 clang++ 隐式链 libc++_shared(=>std::__n1)；改显式链 libcxx1(libc++.so.1)=>std::__1，
 #   使全进程统一 __1（命门③ 关键）。comfy_child.cpp 为 C-like C++，C++ 运行时符号由 libcxxabi/__1 提供。
-# -Wl,--as-needed：修剪上文无 SONAME 扩展的 DT_NEEDED（comfy_child 对它们零符号引用；
-#   收集靠 link 命令 libraries fragment，与 NEEDED 无关）。→ NEEDED 不出现构建机绝对路径。
-target_link_options(comfy_child PRIVATE -nostdlib++ -Wl,--as-needed)
+# 机制 v2（2026-09-03 真机第二轮定谳；v1(-l:短名+改 hvigor 插件) 与 v2-初版(纯 as-needed)均已废弃）：
+#   ⚠ OHOS loader(MUSL-LDSO) 的 dlopen 解析图只含【NEEDED 树】符号——被 as-needed 修剪后，
+#     dlopen(lib-dynload/math.so) 时找不到 libpython 的 PyModuleDef_Init /
+#     _PyThreadState_GetCurrent → "relocating failed: symbol not found"（真机实测）。
+#   ✓ 构造：进 hap libs 的收集 = 「IMPORTED 绝对路径 libraries fragment」（hvigor 官方版直接收集）；
+#     loader 全局符号组(NEEDED 树) = 「target_link_options: -Wl,--no-as-needed + -l:短名」——
+#     options role 不进 codemodel「libraries」→ 收集器无视之，两路互不干扰。
+#     同一 .so 以绝对路径(链接输入)与 -l:短名(options)各出现一次：lld 吸收为一件，
+#     DT_NEEDED 记短名（无 SONAME → basename），loader 从 HAP libs/ 按短名命中。
+set(_NEEDED_SHORT "")
+file(GLOB _NEEDED_SO
+    "${PRE}/torch/_C.cpython-312-aarch64-linux-ohos.so"
+    "${PRE}/dynload/*.so" "${PRE}/numpy/*.so" "${PRE}/scipy/*.so"
+    "${PRE}/_pydantic_core.cpython-312-aarch64-linux-musl.so"
+    "${PRE}/_imaging.cpython-312-aarch64-linux-ohos.so"
+    "${PRE}/_imagingmath.cpython-312-aarch64-linux-ohos.so"
+    "${PRE}/_imagingmorph.cpython-312-aarch64-linux-ohos.so"
+    "${PRE}/_imagingtk.cpython-312-aarch64-linux-ohos.so"
+    "${PRE}/_safetensors_rust.abi3.so" "${PRE}/tokenizers.abi3.so")
+foreach(_S ${_NEEDED_SO})
+    get_filename_component(_FN "${_S}" NAME)
+    list(APPEND _NEEDED_SHORT "-l:${_FN}")
+endforeach()
+# ⚠ 序列（CMake 对「以 - 开头的字符串 link 项」原样保留为 linker flag,可在 libraries 段内
+#   控制 as-needed 状态与 -L/-l: 位置）：
+#   [libraries 区]（前面已列）--as-needed → 绝对路径输入族被修剪（NEEDED 不出现构建机路径）
+#   --no-as-needed -L... -l:短名族 → NEEDED 树=短名（loader 全局符号组/真机可用）
+#   这些以 "-" 开头的 flag 项在 codemodel「libraries」role 出现,但带 "-" 前缀的资源会被
+#   hvigor 官方 findRuntimeFiles 丢弃,不影响收集（收集只认绝对路径项）。
+target_link_options(comfy_child PRIVATE -nostdlib++)
 target_link_libraries(comfy_child PUBLIC
     libhilog_ndk.z.so
     libchild_process.so
@@ -213,7 +240,8 @@ target_link_libraries(comfy_child PUBLIC
     libshm
     libtorch_global_deps
     libz libbz2 liblzma libffi libcrypto libssl libncursesw libpanelw libtinfow
-    ${NOSONAME_LIBS}  # torch._C + 70 个 dynload：IMPORTED 绝对路径（as-needed 修剪 NEEDED）
+    "-Wl,--as-needed"  # 自此之后的绝对路径输入族被修剪（NEEDED 无构建机路径污染）
+    ${NOSONAME_LIBS}   # torch._C + 70 个 dynload：IMPORTED 绝对路径（收集用, 被剪）
     ${NUMPY_SO_LIBS}   # numpy 19 个 C 扩展：同上
     ${SCIPY_SO_LIBS}   # scipy 114 个 C 扩展：同上
     libpc_gcc          # libgcc_s-0bf60adc.so.1（pydantic_core 的 hashed libgcc_s）
@@ -221,4 +249,6 @@ target_link_libraries(comfy_child PUBLIC
     libjpeg            # libjpeg.so.62（PIL _imaging 的 JPEG 依赖，SONAME 闭环）
     ${PIL_LIBS}        # PIL 4 个无 SONAME C 扩展：同上
     ${SF_LIB}          # safetensors._safetensors_rust.abi3.so：同上
-    ${TK_LIB})         # run82 tokenizers.abi3.so：同上
+    ${TK_LIB}          # run82 tokenizers.abi3.so：同上
+    "-Wl,--no-as-needed" "-L${PRE}/torch" "-L${PRE}/dynload" "-L${PRE}/numpy" "-L${PRE}/scipy" "-L${PRE}"
+    ${_NEEDED_SHORT})  # NEEDED 树=短名（loader 全局符号组）; 见上方机制 v2 注释
