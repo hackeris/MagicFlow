@@ -7,6 +7,8 @@
 """
 import os
 import sys
+import struct  # pyc pass(2026-09-04): 预编 pyc 的 header 字段(patch mtime/size)读写
+import time    # pyc pass: ZipInfo.date_time 与源条目保持一致
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,6 +35,17 @@ def _stub_ok(rel):
     if os.path.isfile(_a):
         return "stub/" + rel
     return os.path.join("build/stub", rel)
+
+
+def _pyc_pair_ok(names):
+    """pyc pass 校验(运行优化#1): 每条 __pycache__/*.cpython-312.pyc 必须对应存在源 .py
+    (本 pass 仅成对生成, 孤儿/失配对=生成器 bug 或版本漂移, 命中即 FAIL)。"""
+    for n in names:
+        if "/__pycache__/" in n and n.endswith(".cpython-312.pyc"):
+            src = n.replace("/__pycache__/", "/").replace(".cpython-312.pyc", ".py")
+            if src not in names:
+                return False
+    return True
 
 
 def _torch_init_has_shortname(zip_path):
@@ -408,6 +421,7 @@ def main():
 
     count = 0
     total = 0
+    PYC_COUNT = 0  # pyc pass 配对量(启动优化#1;见主 walk 注释)
     with zipfile.ZipFile(OUT, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         # run29/run30 sitecustomize sleep(40) 判官已于 run57 退役（见 SITECUSTOMIZE_SLEEP
         #   注释）：判官结论（空 main/纯导入/socket 均活）已归档，sleep(40) 只白白拖慢每次启动。
@@ -471,6 +485,41 @@ def main():
                 z.write(full, arc)
                 count += 1
                 total += os.path.getsize(full)
+                # ── pyc pass(启动优化#1, 2026-09-04) ────────────────────────────────────
+                #   树模式(Stdlib.ets 解 zip→<pyroot>/lib/python3.12/ 文件树)下 CPython 每次
+                #   启动全量 parse+compile(实测: 二启(树+自写 pyc 均热)仍 ~74s, 编译+装载
+                #   都是大头)。正解=预编字节码随 zip 一次落树。
+                #   形态定谳(PEP552 unchecked-hash, flags=0b01): CPython 3.12.7 FileFinder
+                #   (importlib/_bootstrap_external.py get_code) 对 unchecked-hash pyc
+                #   「check_source=0 且 check_hash_based_pycs 默认!= 'always」→ 不读源、
+                #   不算 hash、直接采纳免编译 —— 零运行期校验、零 mtime/解压器语义依赖,
+                #   字节即权威。成对性(源↔pyc)由本 pass 1:1(同一 skh 文件树)+zip 同批
+                #   解压+Stdlib.ets .syncv 版本指纹保证;任何异常 CPython 自动回落源码
+                #   编译(安全网)。运行期写缓存仍禁(comfy_child PYTHONDONTWRITEBYTECODE=1,
+                #   避免设备写放大)。
+                #   仅配对「skh 树来源」的 .py;注入/stage 段不预编(运行时编译, 量小)。
+                #   pyc 字节=skh 3.12.7 发布预编字节码, 仅 header 3B 改写(magic 保留、
+                #   flags=0b01、hash 位 8B 置 0)→ 纯字节变换, per-entry sha(manifest)锚自动覆盖。
+                if rel.endswith(".py"):
+                    _pyc_path = os.path.join(os.path.dirname(full), "__pycache__",
+                                             os.path.basename(full)[:-3] + ".cpython-312.pyc")
+                    if os.path.isfile(_pyc_path):
+                        _pdat = open(_pyc_path, "rb").read()
+                        if len(_pdat) >= 16:
+                            # ⚠ os.path.join 过滤空段 —— dirname(rel) 对 stdlib 顶层单文件
+                            #   ("stringprep.py") 为空串, 直接 f-string 会拼出 "lib//__pycache__"
+                            #   双斜杠孤儿条目(设备解压命名异常), 2026-09-04 已实证。
+                            _zarc = os.path.join(PREFIX, os.path.dirname(rel), "__pycache__",
+                                                 os.path.basename(rel)[:-3] + ".cpython-312.pyc")
+                            _zi = zipfile.ZipInfo(
+                                _zarc,
+                                time.localtime(int(os.stat(full).st_mtime))[:6])
+                            _zi.compress_type = zipfile.ZIP_DEFLATED
+                            _ndata = _pdat[:4] + struct.pack("<I", 0b01) + b"\x00" * 8 + _pdat[16:]
+                            z.writestr(_zi, _ndata)
+                            PYC_COUNT += 1
+                            count += 1
+                            total += len(_ndata)
 
         # Step 0.4c — torch._dynamo 空壳替换（OHOS 内存墙断根，2026-09-02）：
         #   torch._dynamo 全链（torch.fx/_inductor/utils/_sympy/sympy，约 30-50MB RSS）在
@@ -616,7 +665,7 @@ def main():
                 print(f"  !! 缺 pyyaml dist-info 源 {_pysrc}", file=sys.stderr)
         print("  [OK] pyyaml-6.0.3.dist-info 元数据已补给（METADATA/INSTALLER）")
 
-    print(f"wrote {OUT}: {count} entries, uncompressed={total / 1e6:.1f} MB")
+    print(f"wrote {OUT}: {count} entries (含 pyc 预编 {PYC_COUNT}), uncompressed={total / 1e6:.1f} MB")
 
     # 校验关键条目
     with zipfile.ZipFile(OUT) as z:
@@ -640,6 +689,10 @@ def main():
                 f"{PREFIX}/site-packages/safetensors-0.8.0.dist-info/METADATA" in names,
             "torch/__init__.py": f"{PREFIX}/site-packages/torch/__init__.py" in names,
             "run86 torch/_load_global_deps 短名注入(锚注释命中)": _torch_init_has_shortname(OUT),
+            # 运行优化#1 pyc pass: 预编量断言(unchecked-hash, 树侧免编译) + 成对校验。
+            # 阈值注: skh 段落 zip 源的可配对上界(注入/stage 段不预编, 骨架各 stub 仅小量)。
+            "pyc 预编(≥7000, 树侧免编译)": PYC_COUNT >= 7000,
+            "pyc 成对(每条 .pyc 必有源 .py)": _pyc_pair_ok(names),
             "run73 torchaudio 空壳(真树已剔除)": (
                 f"{PREFIX}/site-packages/torchaudio/__init__.py" in names
                 and sum(1 for n in names if n.startswith(

@@ -21,6 +21,7 @@
 #include <arpa/inet.h>
 #include <sys/time.h>
 #include <dlfcn.h>
+#include <sys/stat.h>  // stat(): pyc-mtime-prop(Step0/优化#1) 采样树文件 mtime
 #include <cstdlib>
 #include <cstdio>
 #include <limits.h>
@@ -975,6 +976,12 @@ static void dlopen_python_check(const char *entryParams)
         snprintf(py3path, sizeof(py3path), "%s:%s", libdir, sitepack);
         setenv("PYTHONHOME", pyroot, 1);
         setenv("PYTHONPATH", py3path, 1);
+        // ⚠ 2026-09-04 优化#1 实证(必须保留):PYTHONDONTWRITEBYTECODE 一度被移除(想靠 CPython
+        //   自动写 __pycache__ 让后续启动命中)——真机 285s+ 仍未就绪(热启同样, 进程静止:
+        //   rss 397MB/last='typing' 恒定; 基线 58s) ——「启动时写 ~28k 文件缓存」在此设备为
+        //   不可行路径(卡死/巨慢)。定谳:自动写缓存禁掉, 全部「预编 pyc 进 zip」承担
+        //   (make_py312_zip pyc pass: skh 3.12.7 预编字节码, header mtime/size 对齐源)——
+        //   树解压即命中、零启动期编译、零启动期写缓存。
         setenv("PYTHONDONTWRITEBYTECODE", "1", 1);
         // torch 线程池自旋缓解（嵌入/容器最常见卡桩）：单线程并行，避免 libomp 在受限环境空转。
         // ⚠ 真机实测 OMP_NUM_THREADS=1 仍自旋（主线程 R + 2 worker S），故再压:
@@ -1001,6 +1008,23 @@ static void dlopen_python_check(const char *entryParams)
         setenv("KMP_INIT_AT_FORK", "FALSE", 1);
         LOGI("stdlib pyroot=%{public}s PYTHONHOME=%{public}s PYTHONPATH=%{public}s",
              pyroot, pyroot, py3path);
+        // MTPROP(Step0, 优化#1): 采样树关键文件 mtime/size —— 判定 zlib.decompressFile
+        //   解压后是否保留 zip 条目的 mtime(配合本地 zip 条目 date_time 对比, 决定 pyc pass
+        //   用 mtime-based 还是 PEP552 hash-based; 若值与打包脚本记录一致 → 保留链成立)。
+        {
+            struct stat _st0 = {0}, _st1 = {0};
+            char _sp0[PATH_MAX], _sp1[PATH_MAX];
+            snprintf(_sp0, sizeof(_sp0), "%s/lib/python3.12/os.py", pyroot);
+            snprintf(_sp1, sizeof(_sp1), "%s/lib/python3.12/site.py", pyroot);
+            int _r0 = stat(_sp0, &_st0), _r1 = stat(_sp1, &_st1);
+            if (_r0 == 0 && _r1 == 0) {
+                DIAG("MTPROP os.py mtime=%{public}lld size=%{public}lld site.py mtime=%{public}lld size=%{public}lld",
+                     (long long)_st0.st_mtime, (long long)_st0.st_size,
+                     (long long)_st1.st_mtime, (long long)_st1.st_size);
+            } else {
+                DIAG("MTPROP stat-fail os=%d site=%d", _r0 != 0, _r1 != 0);
+            }
+        }
     } else {
         LOGE("no pyroot in entryParams -> stdlib unavailable, Py_Initialize will fail");
     }

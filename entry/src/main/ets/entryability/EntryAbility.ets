@@ -24,6 +24,19 @@ export default class EntryAbility extends UIAbility {
         return;
       }
       hilog.info(DOMAIN, TAG, 'loadContent succeeded');
+      // 2026-09-04 沉浸窗口模式(Pad): 全屏布局 + 隐藏状态栏/底部导航指示器 —— Web 内
+      //   ComfyUI 铺满整屏。参照 ../wineohos 的 PAD 桌面(WineWindowManager/DesktopAbility):
+      //   setSpecificSystemBarEnabled('navigationIndicator', false) 才是隐藏底部手势条的正确
+      //   接口(文档: setWindowSystemBarEnable 的 'navigation' 参数无效果, 状态栏/导航只由
+      //   'status' 控制 —— 故不用它)。与 Index.ets 的 expandSafeArea 配合, 内容顶到边。
+      try {
+        const mw = windowStage.getMainWindowSync();
+        mw.setWindowLayoutFullScreen(true);
+        mw.setSpecificSystemBarEnabled('status', false);
+        mw.setSpecificSystemBarEnabled('navigationIndicator', false);
+      } catch (e) {
+        hilog.error(DOMAIN, TAG, 'immersive window setup failed: %{public}s', JSON.stringify(e));
+      }
     });
   }
 }

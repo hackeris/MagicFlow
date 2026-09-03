@@ -88,38 +88,40 @@ struct Index {
   }
 
   build() {
-    Column({ space: 12 }) {
+    // 全屏铺满（无标题/无边距）：Web 常驻撑满整个窗口（含状态栏/导航栏 safe area），
+    //   后端就绪前仅底部悬浮一行状态小字（调试可读,不占布局）。
+    Stack() {
+      // src 恒为 about:blank：加载源唯一 —— 后端就绪由 waitBackend() 的 controller.loadUrl(BACKEND_URL)
+      //   触发（2019-09-04 全屏改版：src 随 backendReady 切换会与 loadUrl 双触发重复加载）。
+      Web({ src: 'about:blank', controller: this.controller })
+        .javaScriptAccess(true)
+        .domStorageAccess(true)
+        .fileAccess(true)
+        .onPageBegin((event) => {
+          hilog.info(DOMAIN, TAG, 'Web page begin: %{public}s', event.url);
+        })
+        .onPageEnd((event) => {
+          hilog.info(DOMAIN, TAG, 'Web page end: %{public}s', event.url);
+        })
+        .onErrorReceive((event) => {
+          hilog.error(DOMAIN, TAG, 'Web error: url=%{public}s err=%{public}s',
+            event.request.getRequestUrl(), JSON.stringify(event.error));
+        })
+        .width('100%')
+        .height('100%')
       if (!this.backendReady) {
-        Text('ComfyUI — HarmonyOS 移植')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-        Text(this.status).fontSize(14).fontColor(0x999999)
-        Text(`pid = ${this.pid}`).fontSize(13)
-        Text('日志看 hilog tag: ComfyChild / ComfyNapi / ComfyUI')
+        Text(this.status)
           .fontSize(12)
-          .fontColor(0x888888)
-      } else {
-        Text('ComfyUI' + (this.status.includes('加载') ? ' — ' + this.status : '')).fontSize(13).fontColor(0x666666)
-        Web({ src: BACKEND_URL, controller: this.controller })
-          .javaScriptAccess(true)
-          .domStorageAccess(true)
-          .fileAccess(true)
-          .onPageBegin((event) => {
-            hilog.info(DOMAIN, TAG, 'Web page begin: %{public}s', event.url);
-          })
-          .onPageEnd((event) => {
-            hilog.info(DOMAIN, TAG, 'Web page end: %{public}s', event.url);
-          })
-          .onErrorReceive((event) => {
-            hilog.error(DOMAIN, TAG, 'Web error: url=%{public}s err=%{public}s',
-              event.request.getRequestUrl(), JSON.stringify(event.error));
-          })
+          .fontColor(0xCCCCCC)
+          .backgroundColor(0x66000000)
+          .borderRadius(8)
+          .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+          .position({ x: '40%', y: '94%' })  // 底部居中悬浮,不遮挡 Web 操作区
       }
     }
     .width('100%')
     .height('100%')
-    .justifyContent(FlexAlign.Center)
-    .padding(12)
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .onAppear(() => {
       // 自动化验证：启动即拉起 NCP 子进程（entryParams 供 Main 打印）+ 轮询后端
       this.launch(getContext(this));
