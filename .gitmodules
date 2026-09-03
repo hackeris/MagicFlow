@@ -1,0 +1,11 @@
+# Rust 扩展源码 submodule —— 由 scripts/build_rust_exts.sh 从源码交叉编译
+# tokenizers.abi3.so / _safetensors_rust.abi3.so（OHOS aarch64，产物 sha256 与 prebuilt 锚比对）。
+# 注意:两个仓库均为官方 huggingface 仓库的固定 commit（非浮点 HEAD）:
+#   tokenizers  = 7f1623b  "Bump version to 0.23.1"
+#   safetensors = a406ca3  "fix(release): move crates.io to trusted publisher OIDC"
+[submodule "thirdparty/tokenizers"]
+	path = thirdparty/tokenizers
+	url = https://github.com/huggingface/tokenizers.git
+[submodule "thirdparty/safetensors"]
+	path = thirdparty/safetensors
+	url = https://github.com/huggingface/safetensors.git

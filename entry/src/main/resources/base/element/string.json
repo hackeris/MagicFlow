@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "ComfyUI on HarmonyOS"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "ComfyUI desktop port"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "ComfyUI"
+    }
+  ]
+}

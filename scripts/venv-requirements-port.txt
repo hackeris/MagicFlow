@@ -1,0 +1,44 @@
+# venv-requirements-port.txt —— 纯 py 依赖精确 pin（S4，2026-09-03 自 /tmp/hostcv 各 dist-info/METADATA 的
+#   Name/Version 字段导出；不用 pip freeze —— 它会被手工 stub(psutil 无 dist-info)与预演杂物干扰）。
+#
+# 用途：scripts/fetch_externals.sh —— pip download/install --target externals/py-site（离线两步）。
+#   消费方：scripts/make_comfyui_stage.py 的 TOP_PKGS（对应目录名见该文件注释）。
+#
+# 纪律：
+#   · psutil 不在此列 —— venv 里的 psutil.py 是手工 OHOS 兼容 stub(/tmp/hostcv/stub_psutil.py)，
+#     已入库 stub/psutil.py，由 make_comfyui_stage.py 注入；装真包会带 _psutil_linux.so，
+#     .so 被过滤后真机 import psutil 直接 ImportError（启动链死点）。
+#   · regex 不在此列 —— 2026.9.3（留档）：2026.9.3 的 _main.py 硬 import C 扩展 _regex，纯 py 树
+#     与 libs 侧 so 不匹配会带崩主链；其唯一主链引用点已由 zip 侧 AUTODOC_STUB 绕开。
+#   · typing_extensions 不在此列 —— 由 skh 栈（python312.zip 内 site-packages）提供，4.16.0 留档，
+#     重复收会造成 zip 双重条目 Warning（make_py312_zip 以 skh 版为准）。
+#   · 两个私有 wheel（comfy-aimdo/comfy-kitchen 的 py3-none-any 纯 py 版）不来自 PyPI，
+#     已在 config/vendor-wheels/ 入库，fetch 以 --find-links 定位。
+
+pydantic==2.13.5
+pydantic-core==2.46.5
+annotated-types==0.8.0
+typing-inspection==0.4.4
+annotated-doc==0.0.5
+sqlalchemy==2.0.52
+tqdm==4.70.0
+torchsde==0.2.6
+trampoline==0.1.2
+PyYAML==6.0.3
+comfy-kitchen==0.2.31
+comfy-aimdo==0.4.15
+comfyui-embedded-docs==0.5.10
+transformers==5.16.1
+huggingface-hub==1.29.0
+tokenizers==0.23.1
+safetensors==0.8.0
+typer==0.27.2
+click==8.5.0
+rich==15.0.0
+shellingham==1.5.4
+requests==2.34.2
+urllib3==2.7.0
+certifi==2026.7.22
+idna==3.19
+charset-normalizer==3.5.1
+simpleeval==1.0.7

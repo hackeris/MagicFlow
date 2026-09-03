@@ -1,0 +1,18 @@
+# 外部资源 pin 表 —— scripts/fetch_externals.sh 的唯一版本真源。
+# 格式(制表符分隔):name<TAB>type<TAB>url<TAB>sha256<TAB>size<TAB>note
+#   type: lfs=git LFS 仓库 | url=直链 | git=git 仓库(sha256 列=commit,size 列=-)
+#   sha256/size 任一不符即失败;size 可为 - 表示不校验字节数。
+# 校验锚来历见 docs/DESIGN.md「版本与来源 pin」节(2026-09-03 取证)。
+
+skh-run.tar.gz	lfs	https://gitcode.com/openharmony-robot/thirdparty_pytorch.git	d6d6bfcfea0735919fc9a3abedaa96cbda1cf082fbcbc8574fa2ef1a19725406	544835856	LFS路径 test/skh-run.tar.gz(LFS oid 前缀 d6d6bfcfea 与 sha256 自洽)。Python3.12.7+torch2.10.0+scipy/PIL 等 OHOS aarch64 栈,解包后含 usr/lib/python3.12 与 .cargo/config.toml(abbr 真源)
+
+comfyui-frontend-dist.zip	url	https://github.com/Comfy-Org/ComfyUI_frontend/releases/download/v1.54.1/dist.zip	a89cf5e8afed3f6bc00c3a2d68bd43a69ecc0c7dbfd7d9a05ee3c4c18d248806	24601619	官方前端 dist v1.54.1;解压后 index.html md5 必须=61a69562c29975642b296c553cd96d32(二次锚,见下)
+
+comfyui-frontend-index.html	md5	-	61a69562c29975642b296c553cd96d32	-	前端 dist 解压目录内 index.html 的 md5(防"下载到了 npm minified 板"等错误包)
+
+comfyui-src	git	https://github.com/comfyanonymous/ComfyUI.git	03468f4	-	commit=03468f4;clone 后 checkout,再 git apply --check patches/comfyui-src-ohos-changes.patch;apply 后 seedvr/model.py 须含 _dynamo_disable 证据串(见 fetch 脚本校验)
+
+python312.zip	anchor	-	d1930ac2da366ad1056887e0a48e7b1b03d949bca068a6dfce20dc955793cccf	151675300	2026-09-03 既有产物+sha256+字节(重建后须与之一致;make_py312_zip.py 做条目三锚校验)
+
+pydantic_core-aarch64-musl.whl	url	https://pypi.org/packages/py3/p/pydantic-core/pydantic_core-2.46.5-cp312-cp312-musllinux_1_1_aarch64.whl	efd62a42486f1bda5d24cb4f63d15a3c7768375fe83d36f9417b4ad7a2fb20b3	2158408	pydantic_core Rust 内核(PyPI musllinux_1_1_aarch64,matching skh 栈);解包出 _pydantic_core...musl.so + .libs/libgcc_s-0bf60adc.so.1 走 prebuilt;本地副本 /tmp/wheels/pydantic_core-2.46.5-cp312-cp312-musllinux_1_1_aarch64.whl
+

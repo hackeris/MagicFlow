@@ -1,0 +1,32 @@
+# ── build outputs ──
+/node_modules
+/oh_modules
+/.hvigor
+**/build
+**/.cxx
+
+# ── local env / IDE ──
+/local.properties
+/.idea
+/.clangd
+/.clang-format
+/.clang-tidy
+/.appanalyzer
+
+# ── DevEco template test & preview mocks (not part of Phase 0 deliverable) ──
+/entry/src/test
+/entry/src/ohosTest
+/entry/src/mock
+
+# ── local signing keys / scratch (do not commit) ──
+/.ohos
+/entry/libs/*/*.so*
+.temp
+.superpowers
+
+# ── 复现链产物（不入库; 由 fetch/collect/make 重建并做锚校验）──
+/externals
+/entry/src/main/cpp/prebuilt
+/entry/src/main/resources/rawfile/python312.zip
+/stub/__pycache__
+/scripts/__pycache__

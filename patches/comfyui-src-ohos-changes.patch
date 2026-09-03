@@ -1,0 +1,551 @@
+diff --git a/comfy/ldm/seedvr/model.py b/comfy/ldm/seedvr/model.py
+index a978698..7a4a285 100644
+--- a/comfy/ldm/seedvr/model.py
++++ b/comfy/ldm/seedvr/model.py
+@@ -3,6 +3,16 @@ from typing import Optional, Tuple, Union, List, Dict, Any, Callable
+ import torch.nn.functional as F
+ from math import ceil, pi
+ import torch
++# OHOS 移植补丁（2026-09-02 修正，第一次写法失败）：`@torch._dynamo.disable` 求值会拖入
++#   torch._dynamo 及其内部依赖 torch.fx / torch._inductor / sympy（约 30-50MB RSS，OHOS
++#   子进程内存预算内直接被 SIGKILL）。⚠ 教训实锤：torch._dynamo 是 LazyModule——连
++#   getattr(torch, "_dynamo", None) 都会触发整链加载（host 实测：getattr 前后 sys.modules
++#   从无到 592 个模块）。所以只能查 sys.modules（纯 dict 查找，双关安全）：dynamo 已被
++#   别处加载则用真 disable；未加载则 no-op。无人真正触发 torch.compile，行为等价。
++import sys as _sys
++_dm = _sys.modules.get("torch._dynamo", None)
++_dynamo_disable = (getattr(_dm, "disable", lambda f: f) if _dm is not None
++                   else (lambda f: f))
+ from itertools import accumulate, chain
+ from comfy.ldm.modules.diffusionmodules.model import get_timestep_embedding
+ from comfy.ldm.seedvr.attention import optimized_var_attention
+@@ -282,7 +292,7 @@ class NaRotaryEmbedding3d(RotaryEmbedding3d):
+         k = k.transpose(0, 1)
+         return q, k
+ 
+-    @torch._dynamo.disable
++    @_dynamo_disable
+     def get_freqs(
+         self,
+         shape: torch.LongTensor,
+@@ -421,7 +431,7 @@ class NaMMRotaryEmbedding3d(MMRotaryEmbeddingBase):
+         txt_k = txt_k.transpose(0, 1)
+         return vid_q, vid_k, txt_q, txt_k
+ 
+-    @torch._dynamo.disable  # Disable compilation: .tolist() is data-dependent and causes graph breaks
++    @_dynamo_disable  # Disable compilation: .tolist() is data-dependent and causes graph breaks
+     def get_freqs(
+         self,
+         vid_shape: torch.LongTensor,
+diff --git a/comfy/model_base.py b/comfy/model_base.py
+index c6fa1d6..b0ac863 100644
+--- a/comfy/model_base.py
++++ b/comfy/model_base.py
+@@ -74,7 +74,10 @@ import comfy.ldm.cogvideo.model
+ import comfy.ldm.rt_detr.rtdetr_v4
+ import comfy.ldm.ernie.model
+ import comfy.ldm.sam3.detector
+-import comfy.ldm.hidream_o1.model
++try:
++    import comfy.ldm.hidream_o1.model
++except Exception:
++    pass
+ from comfy.ldm.hidream_o1.conditioning import build_extra_conds
+ import comfy.ldm.sensenova.conditioning
+ import comfy.ldm.sensenova.model
+diff --git a/comfy/sd.py b/comfy/sd.py
+index a73607c..74ff665 100644
+--- a/comfy/sd.py
++++ b/comfy/sd.py
+@@ -41,52 +41,184 @@ from . import gligen
+ from . import diffusers_convert
+ from . import model_detection
+ 
+-from . import sd1_clip
+-from . import sdxl_clip
+-import comfy.text_encoders.sd2_clip
+-import comfy.text_encoders.sd3_clip
+-import comfy.text_encoders.sa_t5
+-import comfy.text_encoders.aura_t5
+-import comfy.text_encoders.pixart_t5
+-import comfy.text_encoders.hydit
+-import comfy.text_encoders.flux
+-import comfy.text_encoders.long_clipl
+-import comfy.text_encoders.genmo
+-import comfy.text_encoders.lt
+-import comfy.text_encoders.hunyuan_video
+-import comfy.text_encoders.cosmos
+-import comfy.text_encoders.lumina2
+-import comfy.text_encoders.pixeldit
+-import comfy.text_encoders.wan
+-import comfy.text_encoders.hidream
+-import comfy.text_encoders.ace
+-import comfy.text_encoders.omnigen2
+-import comfy.text_encoders.qwen_image
+-import comfy.text_encoders.hunyuan_image
+-import comfy.text_encoders.z_image
+-import comfy.text_encoders.krea2
+-import comfy.text_encoders.mage_flow
+-import comfy.text_encoders.ideogram4
+-import comfy.text_encoders.ovis
+-import comfy.text_encoders.kandinsky5
+-import comfy.text_encoders.jina_clip_2
+-import comfy.text_encoders.newbie
+-import comfy.text_encoders.anima
+-import comfy.text_encoders.ace15
+-import comfy.text_encoders.longcat_image
+-import comfy.text_encoders.qwen35
+-import comfy.text_encoders.qwen3vl
+-import comfy.text_encoders.minimax
+-import comfy.text_encoders.minimax_music
++try:
++    from . import sd1_clip
++except Exception:
++    pass
++try:
++    from . import sdxl_clip
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.sd2_clip
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.sd3_clip
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.sa_t5
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.aura_t5
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.pixart_t5
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.hydit
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.flux
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.long_clipl
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.genmo
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.lt
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.hunyuan_video
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.cosmos
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.lumina2
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.pixeldit
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.wan
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.hidream
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.ace
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.omnigen2
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.qwen_image
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.hunyuan_image
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.z_image
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.krea2
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.mage_flow
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.ideogram4
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.ovis
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.kandinsky5
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.jina_clip_2
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.newbie
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.anima
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.ace15
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.longcat_image
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.qwen35
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.qwen3vl
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.minimax
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.minimax_music
++except Exception:
++    pass
+ import comfy.ldm.minimax.vae
+ import comfy.ldm.minimax.audio_vae
+-import comfy.text_encoders.boogu
+-import comfy.text_encoders.ernie
+-import comfy.text_encoders.gemma4
+-import comfy.text_encoders.cogvideo
+-import comfy.text_encoders.sa3
+-import comfy.text_encoders.gpt_oss
+-import comfy.text_encoders.joyimage
++try:
++    import comfy.text_encoders.boogu
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.ernie
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.gemma4
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.cogvideo
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.sa3
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.gpt_oss
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.joyimage
++except Exception:
++    pass
+ 
+ import comfy.model_patcher
+ import comfy.lora
+diff --git a/comfy/supported_models.py b/comfy/supported_models.py
+index ae2d37d..59ed210 100644
+--- a/comfy/supported_models.py
++++ b/comfy/supported_models.py
+@@ -2,43 +2,154 @@ import torch
+ from . import model_base
+ from . import utils
+ 
+-from . import sd1_clip
+-from . import sdxl_clip
+-import comfy.text_encoders.sd2_clip
+-import comfy.text_encoders.sd3_clip
+-import comfy.text_encoders.sa_t5
+-import comfy.text_encoders.sa3
+-import comfy.text_encoders.aura_t5
+-import comfy.text_encoders.pixart_t5
+-import comfy.text_encoders.hydit
+-import comfy.text_encoders.flux
+-import comfy.text_encoders.genmo
+-import comfy.text_encoders.lt
+-import comfy.text_encoders.hunyuan_video
+-import comfy.text_encoders.minimax
+-import comfy.text_encoders.minimax_music
+-import comfy.text_encoders.cosmos
+-import comfy.text_encoders.lumina2
+-import comfy.text_encoders.wan
+-import comfy.text_encoders.ace
+-import comfy.text_encoders.omnigen2
+-import comfy.text_encoders.qwen_image
+-import comfy.text_encoders.hunyuan_image
+-import comfy.text_encoders.kandinsky5
+-import comfy.text_encoders.z_image
+-import comfy.text_encoders.ideogram4
+-import comfy.text_encoders.boogu
+-import comfy.text_encoders.krea2
+-import comfy.text_encoders.mage_flow
+-import comfy.text_encoders.joyimage
+-import comfy.text_encoders.anima
+-import comfy.text_encoders.ace15
+-import comfy.text_encoders.longcat_image
+-import comfy.text_encoders.ernie
+-import comfy.text_encoders.cogvideo
+-import comfy.text_encoders.hidream_o1
+-import comfy.text_encoders.sensenova
+-import comfy.text_encoders.pixeldit
++try:
++    from . import sd1_clip
++except Exception:
++    pass
++try:
++    from . import sdxl_clip
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.sd2_clip
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.sd3_clip
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.sa_t5
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.sa3
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.aura_t5
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.pixart_t5
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.hydit
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.flux
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.genmo
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.lt
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.hunyuan_video
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.minimax
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.minimax_music
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.cosmos
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.lumina2
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.wan
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.ace
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.omnigen2
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.qwen_image
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.hunyuan_image
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.kandinsky5
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.z_image
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.ideogram4
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.boogu
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.krea2
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.mage_flow
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.joyimage
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.anima
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.ace15
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.longcat_image
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.ernie
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.cogvideo
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.hidream_o1
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.sensenova
++except Exception:
++    pass
++try:
++    import comfy.text_encoders.pixeldit
++except Exception:
++    pass
+ 
+ from . import supported_models_base
+ from . import latent_formats
+diff --git a/main.py b/main.py
+index bf0ea73..15a87a0 100644
+--- a/main.py
++++ b/main.py
+@@ -36,6 +36,7 @@ from comfy_execution.utils import get_executing_context
+ from comfy_api import feature_flags
+ from app.database.db import init_db, dependencies_available
+ 
++print('M-jobs t=%.2f top-imports-end' % time.time(), flush=True)
+ if __name__ == "__main__":
+     #NOTE: These do not do anything on core ComfyUI, they are for custom nodes.
+     os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
+@@ -245,12 +246,14 @@ if 'torch' in sys.modules:
+     logging.warning("WARNING: Potential Error in code: Torch already imported, torch should never be imported before this point.")
+ 
+ 
++print('M-jobs t=%.2f pre-comfy.utils' % time.time(), flush=True)
+ import comfy.utils
+ 
+ import execution
+ import server
+ from protocol import BinaryEventTypes
+ import nodes
++print('M-jobs t=%.2f post-nodes' % time.time(), flush=True)
+ import comfy.model_management
+ import comfyui_version
+ import app.logger
+@@ -258,6 +261,7 @@ import hook_breaker_ac10a0
+ 
+ import comfy.memory_management
+ import comfy.model_patcher
++print('M-jobs t=%.2f post-model_patcher' % time.time(), flush=True)
+ 
+ 
+ def dynamic_vram_supported():
+@@ -539,6 +543,7 @@ def start_comfyui(asyncio_loop=None):
+         comfyui_manager.start()
+ 
+     hook_breaker_ac10a0.save_functions()
++    print('M-jobs t=%.2f before-init_extra_nodes' % time.time(), flush=True)
+     asyncio_loop.run_until_complete(nodes.init_extra_nodes(
+         init_custom_nodes=(not args.disable_all_custom_nodes) or len(args.whitelist_custom_nodes) > 0,
+         init_api_nodes=not args.disable_api_nodes
+@@ -551,12 +556,15 @@ def start_comfyui(asyncio_loop=None):
+     hook_breaker_ac10a0.restore_functions()
+ 
+     cuda_malloc_warning()
++    print('M-jobs t=%.2f before-setup_database' % time.time(), flush=True)
+     setup_database()
++    print('M-jobs t=%.2f before-add_routes' % time.time(), flush=True)
+ 
+     prompt_server.add_routes()
+     hijack_progress(prompt_server)
+ 
+     threading.Thread(target=prompt_worker, daemon=True, args=(prompt_server.prompt_queue, prompt_server,)).start()
++    print('M-jobs t=%.2f before-start_all' % time.time(), flush=True)
+ 
+     if args.quick_test_for_ci:
+         exit(0)
+@@ -575,6 +583,7 @@ def start_comfyui(asyncio_loop=None):
+ 
+     async def start_all():
+         await prompt_server.setup()
++        print('M-jobs t=%.2f before-run(bind-8188)' % time.time(), flush=True)
+         await run(prompt_server, address=args.listen, port=args.port, verbose=not args.dont_print_server, call_on_start=call_on_start)
+ 
+     # Returning these so that other code can integrate with the ComfyUI loop and server
