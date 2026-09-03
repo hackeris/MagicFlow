@@ -73,35 +73,62 @@ import_so(libncursesw  "libncursesw.so.6")
 import_so(libpanelw    "libpanelw.so.6")
 import_so(libtinfow    "libtinfow.so.6")
 
-# torch._C + lib-dynload 的 70 个内建扩展都是「无 SONAME」的 .so。
-# ⚠ SONAME 陷阱：无 SONAME 的 IMPORTED target 会让 comfy_child 的 DT_NEEDED 记成「构建机绝对路径」，
-#   真机 loader 按该绝对路径找不到 → libcomfy_child.so 加载崩（Step 0.3a 已踩）。禁止 patchelf 改 .so。
-# ✓ 解法（不触碰 .so）：用 -l:filename + -L dir 链接，linker 便把 DT_NEEDED 记为短名 filename，
-#   真机 loader 在 libs/ 按短名命中（libs/ 已含同名 .so）。纯链接器用法，非 hack。
-link_directories(${PRE}/torch ${PRE}/dynload ${PRE}/numpy ${PRE}/scipy)
+# ─────────────────────────────────────────────────────────────────────────────
+# 无 SONAME 扩展导入批量器（torch._C + lib-dynload 内建 70 + numpy 19 + scipy 113 +
+#   PIL 4 + _pydantic_core + _safetensors_rust + tokenizers —— 全部「无 SONAME」.so）。
+#
+# ★ 机制设计（2026-09-03 定谳 —— 替代旧的「-l: 短名 + 改 hvigor 插件」方案；
+#   /apps/harmony 的 hvigor 插件已还原为官方 6.24.2 原版，md5 705309b0…）：
+#   1. 每个扩展一个 IMPORTED target，IMPORTED_LOCATION=prebuilt 绝对路径
+#      → CMake link 命令以【绝对路径】出现在 codemodel「libraries」fragment
+#      → hvigor 官方版 findRuntimeFiles 对「非 sysroot 的绝对路径」直接收集进 HAP libs/<abi>/
+#      （旧 24-so 事故根因 = 用 -l:xxx 带 '-' 前缀，被 handleBuildDir=join(build,"-l:xxx") 丢弃）。
+#   2. 这批扩展绝不进 comfy_child 的 DT_NEEDED：无 SONAME 的路径输入一旦 NEEDED，
+#      记录的是「构建机绝对路径」，真机 loader 按该路径找不到 → 加载崩（Step 0.3a 已踩；
+#      so 未经 patchelf、SONAME 也无法补）。
+#      → 解法：comfy_child 追加 -Wl,--as-needed（见下 target_link_options）。comfy_child 对
+#      本批扩展零符号引用（全是 PyInit_xxx，由 meta_path finder 从 libs/ 按短名
+#      dlopen+PyInit+注册进 sys.modules，与 torch._C 同构）→ as-needed 修剪掉这些 NEEDED；
+#      收集走「libraries」fragment 与 NEEDED 无关，236 个 .so 照旧落位 HAP libs/。
+#   3. 铁律不变：一切被加载的 .so 必须打包进 HAP libs/<abi>/；纯 .py 走 rawfile→filesDir。
+# ⚠ 不得加 link_directories(-L)：CMake 会把「-L 目录内可解析的绝对路径」规范化为 -l<basename>
+#   （去找 lib_xxx.so 而失败）。不加 -L 时 IMPORTED 目标原样输出绝对路径。
+# ─────────────────────────────────────────────────────────────────────────────
+set(EXT_N 0)
+function(import_ext_so relpath outvar)
+    math(EXPR EXT_N2 "${EXT_N}+1")
+    set(EXT_N ${EXT_N2} PARENT_SCOPE)
+    set(tgt "extn${EXT_N2}")
+    add_library(${tgt} SHARED IMPORTED)
+    set_target_properties(${tgt} PROPERTIES IMPORTED_LOCATION "${PRE}/${relpath}")
+    set(_cur ${${outvar}})          # 读取父作用域已有 list（列表项无空格，直接展开）
+    list(APPEND _cur ${tgt})
+    set(${outvar} "${_cur}" PARENT_SCOPE)
+endfunction()
 
-# 生成 _C 与 70 个 dynload 的 -l: 短名链接标志（保留原始文件名作 NEEDED）
-set(NOSONAME_LIBS "-l:_C.cpython-312-aarch64-linux-ohos.so")
+# torch._C + lib-dynload 的 70 个内建扩展
+set(NOSONAME_LIBS "")
+import_ext_so("torch/_C.cpython-312-aarch64-linux-ohos.so" NOSONAME_LIBS)
 file(GLOB DYNLOAD_SO "${PRE}/dynload/*.so")
 foreach(MODSO ${DYNLOAD_SO})
     get_filename_component(FN ${MODSO} NAME)
-    list(APPEND NOSONAME_LIBS "-l:${FN}")
+    import_ext_so("dynload/${FN}" NOSONAME_LIBS)
 endforeach()
 
 # numpy 1.26.4 C 扩展（skh 栈同源 aarch64-ohos）：无 SONAME、仅 NEEDED libc.so（系统库，无需补依赖）。
-# 与 dynload 同理，用 -l: 短名使打包器把 19 个 so 一并扫进 HAP libs/<abi>/。
+# 与 dynload 同理经 import_ext_so 扫进 HAP libs/<abi>/；
 # 运行时由 sys.meta_path finder（probe 内 install）把 numpy.* 的 dotted 名重定向到 libs/ 绝对路径。
 set(NUMPY_SO_LIBS "")
 file(GLOB NUMPY_SO "${PRE}/numpy/*.so")
 foreach(MODSO ${NUMPY_SO})
     get_filename_component(FN ${MODSO} NAME)
-    list(APPEND NUMPY_SO_LIBS "-l:${FN}")
+    import_ext_so("numpy/${FN}" NUMPY_SO_LIBS)
 endforeach()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 0.4c：scipy 114 个 C 扩展（skh 栈同源 aarch64-ohos，平铺 prebuilt/scipy/）。
 #   均无 SONAME、NEEDED 集 = libc.so + libc++/libc++abi/libunwind（三者已有 import_so 锁 libs/）。
-#   与 numpy 同流程：-l: 短名 + COPY 桥 → hap libs/arm64；finder 短名重定向自动覆盖
+#   与 numpy 同流程经 import_ext_so → hap libs/arm64；finder 短名重定向自动覆盖
 #   （v17 的「父目录同名自然目标放行」guard 保证 scipy.special._ufuncs 等 dotted 名命中 libs）。
 #   触发链：comfy/sdpose.py:3 `from scipy.ndimage import gaussian_filter`（model_base → openaimodel）。
 # ─────────────────────────────────────────────────────────────────────────────
@@ -109,73 +136,51 @@ set(SCIPY_SO_LIBS "")
 file(GLOB SCIPY_SO "${PRE}/scipy/*.so")
 foreach(MODSO ${SCIPY_SO})
     get_filename_component(FN ${MODSO} NAME)
-    list(APPEND SCIPY_SO_LIBS "-l:${FN}")
-    file(COPY ${MODSO} DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
-endforeach()
-
-# ★ hvigor ProcessLibs 库收集桥（2026-09-02）：
-#   ProcessLibs 从 cmake codemodel 的「libraries」fragment 收库——`-l:短名` 带 '-' 前缀，
-#   findRuntimeFiles 会把它当作 linker flag 交给 handleBuildDir（=join(build, "-l:xxx")）
-#   而永远找不到 → 90 个无 SONAME 扩展被静默丢弃、进不了 hap libs/（24-so 事故根因）。
-#   桥接：①（已改 hvigor src）generate-native-library.js 在 handleBuildDir 前 strip "-l:"；
-#   ② 本段把全部扩展 so 在 configure 时拷进 build 目录（=target.paths.build=ninja work dir），
-#   strip 后的 fragment 名即可在 build 目录定位 → 被收集进 hap libs/（仍是短名，DT_NEEDED 匹配）。
-file(GLOB EXT_SO_COLLECT
-    "${PRE}/torch/_C.cpython-312-aarch64-linux-ohos.so"
-    "${PRE}/dynload/*.so"
-    "${PRE}/numpy/*.so")
-foreach(EXT ${EXT_SO_COLLECT})
-    file(COPY ${EXT} DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+    import_ext_so("scipy/${FN}" SCIPY_SO_LIBS)
 endforeach()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 0.4b：pydantic_core（pydantic 2.46.5 的 Rust 内核，PyPI musllinux_1_1_aarch64 wheel 直装）。
-#   _pydantic_core.cpython-312-aarch64-linux-musl.so 无 SONAME —— 同 torch._C 的 -l: 短名链
-#   （禁止 patchelf 碰 .so）；运行时由宿主桥 dlopen+PyInit_pydantic_core+注册进
+#   _pydantic_core.cpython-312-aarch64-linux-musl.so 无 SONAME → 与 torch._C 同经 import_ext_so；
+#   运行时由宿主桥 dlopen+PyInit_pydantic_core+注册进
 #   sys.modules['pydantic_core._pydantic_core']（pydantic_core/__init__.py 的
 #   `from ._pydantic_core import ...` 命中预注册，与 torch._C 同构）。
 #   它 NEEDED「libgcc_s-0bf60adc.so.1」（wheel 自带 hashed SONAME）+ libc.so：hashed 名不在
 #   系统里，必须以 import_so 单文件锁进 libs/（有 SONAME，按 SONAME 闭环）。
 # ─────────────────────────────────────────────────────────────────────────────
-link_directories(${PRE})
 import_so(libpc_gcc "libgcc_s-0bf60adc.so.1")   # pydantic_core 的 hashed libgcc_s
-set(PC_CORE_LIB "-l:_pydantic_core.cpython-312-aarch64-linux-musl.so")
-# 无 SONAME 模块 .so 同 EXT_SO_COLLECT 桥：configure 时拷进 build 目录，
-# 供 hvigor ProcessLibs strip "-l:" 后在 build 目录定位并收集进 hap libs/。
-file(COPY ${PRE}/_pydantic_core.cpython-312-aarch64-linux-musl.so DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+set(PC_CORE_LIB "")
+import_ext_so("_pydantic_core.cpython-312-aarch64-linux-musl.so" PC_CORE_LIB)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 0.4c：Pillow C 扩展（skh 栈同源 aarch64-linux-ohos，5 个 so 全无 SONAME——除 libjpeg）。
 #   PIL/Image.py 的 `from . import _imaging as core`（comfy_execution/progress.py 裸 import PIL.Image）
 #   在真机首跑实证 ImportError（0.4c py-err[6]）。_imaging NEEDED libjpeg.so.62+libz.so.1+libc.so：
 #   libz/libc 已在 libs/（libz 为既有 import_so）；libjpeg.so.62 有 SONAME → import_so 单文件锁进。
-#   4 个无 SONAME 模块 .so 同 _C 打法：-l: 短名链 + file(COPY) 桥 → hap libs/arm64，
+#   4 个无 SONAME 模块 .so 同 _C 打法经 import_ext_so → hap libs/arm64，
 #   运行时由 probe 的 meta_path finder 扫 libs/arm64 自动收进 _exts（短名 _imaging 等），
 #   PIL._imaging 的 dotted import 命中重定向（与 torch._C/numpy 同构，finder 无需改）。
 # ─────────────────────────────────────────────────────────────────────────────
 import_so(libjpeg "libjpeg.so.62")   # _imaging 的 JPEG 解码依赖（skh 栈 libjpeg-turbo）
-file(GLOB PIL_MOD_SO
-    "${PRE}/_imaging.cpython-312-aarch64-linux-ohos.so"
-    "${PRE}/_imagingmath.cpython-312-aarch64-linux-ohos.so"
-    "${PRE}/_imagingmorph.cpython-312-aarch64-linux-ohos.so"
-    "${PRE}/_imagingtk.cpython-312-aarch64-linux-ohos.so")
 set(PIL_LIBS "")
-foreach(PILSO ${PIL_MOD_SO})
-    get_filename_component(FN ${PILSO} NAME)
-    list(APPEND PIL_LIBS "-l:${FN}")
-    file(COPY ${PILSO} DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+foreach(PILSO
+    "_imaging.cpython-312-aarch64-linux-ohos.so"
+    "_imagingmath.cpython-312-aarch64-linux-ohos.so"
+    "_imagingmorph.cpython-312-aarch64-linux-ohos.so"
+    "_imagingtk.cpython-312-aarch64-linux-ohos.so")
+    import_ext_so("${PILSO}" PIL_LIBS)
 endforeach()
 
 # Step 0.4c-2：safetensors 的 Rust 扩展（abi3 全 ABI —— finder 后缀已加 .abi3.so 覆盖）。
-#   无 SONAME，同 -l: 短名 + COPY 桥；NEEDED libunwind.so.1（既有 libunwind1 闭环）+ libc.so。
-file(COPY ${PRE}/_safetensors_rust.abi3.so DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
-set(SF_LIB "-l:_safetensors_rust.abi3.so")
+#   无 SONAME，同 import_ext_so；NEEDED libunwind.so.1（既有 libunwind1 闭环）+ libc.so。
+set(SF_LIB "")
+import_ext_so("_safetensors_rust.abi3.so" SF_LIB)
 
 # run82 — tokenizers 的 Rust 扩展（bindings/python 交叉编译产物，lib name=tokenizers →
 #   PyInit_tokenizers；完整键 tokenizers.tokenizers 由 _LibsFinder 短名劫持自 libs/，
 #   与 _safetensors_rust 同机制：铁律 so 只进 libs/<abi>/）。
-file(COPY ${PRE}/tokenizers.abi3.so DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
-set(TK_LIB "-l:tokenizers.abi3.so")
+set(TK_LIB "")
+import_ext_so("tokenizers.abi3.so" TK_LIB)
 
 # ComfyUI 后端子进程（NCP）：入口 extern "C" void Main(NativeChildProcess_Args)。
 add_library(comfy_child SHARED
@@ -188,7 +193,9 @@ target_compile_options(comfy_child PRIVATE
     -fno-omit-frame-pointer)
 # -nostdlib++：禁 clang++ 隐式链 libc++_shared(=>std::__n1)；改显式链 libcxx1(libc++.so.1)=>std::__1，
 #   使全进程统一 __1（命门③ 关键）。comfy_child.cpp 为 C-like C++，C++ 运行时符号由 libcxxabi/__1 提供。
-target_link_options(comfy_child PRIVATE -nostdlib++)
+# -Wl,--as-needed：修剪上文无 SONAME 扩展的 DT_NEEDED（comfy_child 对它们零符号引用；
+#   收集靠 link 命令 libraries fragment，与 NEEDED 无关）。→ NEEDED 不出现构建机绝对路径。
+target_link_options(comfy_child PRIVATE -nostdlib++ -Wl,--as-needed)
 target_link_libraries(comfy_child PUBLIC
     libhilog_ndk.z.so
     libchild_process.so
@@ -206,12 +213,12 @@ target_link_libraries(comfy_child PUBLIC
     libshm
     libtorch_global_deps
     libz libbz2 liblzma libffi libcrypto libssl libncursesw libpanelw libtinfow
-    ${NOSONAME_LIBS}  # torch._C + 70 个 dynload：-l:短名，DT_NEEDED=短名
-    ${NUMPY_SO_LIBS}   # numpy 19 个 C 扩展：-l:短名，DT_NEEDED=短名
-    ${SCIPY_SO_LIBS}   # scipy 114 个 C 扩展：-l:短名，DT_NEEDED=短名
+    ${NOSONAME_LIBS}  # torch._C + 70 个 dynload：IMPORTED 绝对路径（as-needed 修剪 NEEDED）
+    ${NUMPY_SO_LIBS}   # numpy 19 个 C 扩展：同上
+    ${SCIPY_SO_LIBS}   # scipy 114 个 C 扩展：同上
     libpc_gcc          # libgcc_s-0bf60adc.so.1（pydantic_core 的 hashed libgcc_s）
-    ${PC_CORE_LIB}     # _pydantic_core.cpython-312-...-musl.so：-l:短名，DT_NEEDED=短名
+    ${PC_CORE_LIB}     # _pydantic_core.cpython-312-...-musl.so：同上
     libjpeg            # libjpeg.so.62（PIL _imaging 的 JPEG 依赖，SONAME 闭环）
-    ${PIL_LIBS}        # PIL 4 个无 SONAME C 扩展：-l:短名，DT_NEEDED=短名
-    ${SF_LIB}          # safetensors._safetensors_rust.abi3.so：-l:短名，DT_NEEDED=短名
-    ${TK_LIB})         # run82 tokenizers.abi3.so：-l:短名，DT_NEEDED=短名
+    ${PIL_LIBS}        # PIL 4 个无 SONAME C 扩展：同上
+    ${SF_LIB}          # safetensors._safetensors_rust.abi3.so：同上
+    ${TK_LIB})         # run82 tokenizers.abi3.so：同上
