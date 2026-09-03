@@ -118,5 +118,7 @@ CLT 6.1.1.280 / hvigor 6.24.2（**官方原版**，md5 `705309b0…`）/ SDK 6.1
 
 - **本目录（`/data/share/comfyui`）= 正式项目/源码库**（git, 无大二进制, 全链可复现）。
 - **`/data/share/comfy-ohos-port` = 临时研究现场**（DevEco 调试、真机试验; git 仅 1 个 WIP 提交）。
-- 单向同步：研究区 → 本区，用 `comfy-ohos-port/scripts/push_sources.sh`（白名单 rsync + `--delete`
-  + 默认 dry-run）。**改动一律先落正规区,研究区只跑实验**。
+- 镜像同步工具 = 双区互备的 `scripts/push_sources.py`（白名单镜像 + 源端缺失即删 + 默认 dry-run）。
+  **S13 达成（2026-09-03）后方向裁决：正式修复一律落正规区,再 `--apply --reverse`
+  （正规区 → 研究区）让调试现场追平**；默认方向（研究区 → 正规区）仅当研究区有
+  新调试成果时才用,且会覆盖正规区侧修复,慎用。**改动一律先落正规区,研究区只跑实验**。
