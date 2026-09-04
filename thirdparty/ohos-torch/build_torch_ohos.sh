@@ -48,8 +48,14 @@ for p in "$PATCH_DIR"/*.patch; do
   [ -f "$EXT_DIR/pytorch/.patch-$(basename "$p").done" ] && continue
   # ⚠ 2026-09-05 复现链教训: 不得 `|| true` 吞错+无条件 touch done —— patch 失败曾被打上
   #   假 done(08/11), 导致 cmake 环境白名单缺失(NATIVE_BUILD_DIR→/bin/mkdisp 即死)。
-  #   失败必须 FATAL(天然幂等: 已应用则 patch 本应跳过?不——已应用的 hunk 会告 skip,
-  #   由 reverse 判定: 已应用即返回 0, 故失败=真失败)。
+  #   幂等三分支: ①done 已过 ✓ ②hunk 已应用(反向可) → 补 done ③真未应用 → 正向 apply,
+  #   失败=FATAL(基线漂移须查, 不得静默)。patch --forward 对"已应用"只会 skip+exit 1,
+  #   若无②会误 FATAL —— 复现链实测踩两次, 别再来。
+  if git -C "$EXT_DIR/pytorch" apply --reverse --check < "$p" 2>/dev/null; then
+    touch "$EXT_DIR/pytorch/.patch-$(basename "$p").done"
+    echo "  [PATCH] already-applied(补 done): $(basename "$p")"
+    continue
+  fi
   if patch -p0 -d "$EXT_DIR" --forward < "$p" -r -; then
     touch "$EXT_DIR/pytorch/.patch-$(basename "$p").done"
     echo "  [PATCH] applied $(basename "$p")"
