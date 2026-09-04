@@ -13,7 +13,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SRC="/data/share/comfyui/externals/pytorch-src"      # fetch_externals.sh 产物(全量 clone v2.10.0 + submodules)
+SRC="$ROOT/externals/pytorch-src"                     # fetch_externals.sh 产物(全量 clone v2.10.0 + submodules); $ROOT 随 worktree 漂移(2026-09-05 修正 hardcode)
 PATCH_DIR="$ROOT/thirdparty/ohos-torch/patches"
 LLVM=/apps/harmony/sdk/default/openharmony/native/llvm/bin
 NATIVE=/apps/harmony/sdk/default/openharmony/native
@@ -23,7 +23,9 @@ OUT="$ROOT/build/torch-ohos-install"
 HOST_PROTOC=/opt/protobuf-host/bin/protoc
 # OpenBLAS: 官方 v0.3.29 交叉自建(HOSTCC=gcc TARGET=ARMV8 USE_THREAD=1; skh 树老 .a 在设备上
 # MM 必崩(alloc_mmap→ld-musl SIGSEGV, G4 run 实锤) 且无 pthread=纯串行版本 → 弃用)
-OB_OURS_SRC=/data/share/comfyui/externals/openblas
+# 前置: bash thirdparty/ohos-torch/build_openblas_ohos.sh externals/openblas-src
+#   (产物 externals/openblas-src/lib/libopenblas.a; 2026-09-05 修正 worktree 漂移 hardcode)
+OB_OURS_SRC="$ROOT/externals/openblas-src"
 OB_SYSROOT=/apps/harmony/sdk/default/openharmony/native/sysroot
 # sleef 交叉分支: NATIVE_BUILD_DIR 为宿主机已编译的工具目录(CMakeLists 用 IMPORTED 加该路径下 mkdisp)
 SLEEF_NATIVE=/opt/sleef-native
