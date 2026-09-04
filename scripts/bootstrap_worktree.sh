@@ -33,6 +33,8 @@ command -v aarch64-linux-gnu-gfortran >/dev/null || {
 say "$OK aarch64-linux-gnu-gfortran"
 
 # 3) rust + ohos target
+#   ⚠ rustup 默认装 ~/.cargo/bin, 常不在 PATH —— 与 build_rust_exts.sh 相同: 先追加
+export PATH="$HOME/.cargo/bin:$PATH"
 command -v rustc >/dev/null || bad "无 rustc —— 先 curl https://sh.rustup.rs | sh 再重跑"
 if ! rustup target list --installed 2>/dev/null | grep -q '^aarch64-unknown-linux-ohos$'; then
   say "rust target aarch64-unknown-linux-ohos 缺失 → rustup target add ..."
