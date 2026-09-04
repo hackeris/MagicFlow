@@ -1,0 +1,12 @@
+--- pytorch/third_party/tensorpipe/tensorpipe/channel/cma/context_impl.cc.~1~	2025-06-15 23:21:01.618237747 +0800
++++ pytorch/third_party/tensorpipe/tensorpipe/channel/cma/context_impl.cc	2025-06-15 23:20:54.955866840 +0800
+@@ -8,7 +8,9 @@
+ 
+ #include <tensorpipe/channel/cma/context_impl.h>
+ 
++#ifdef __GLIBC__
+ #include <linux/prctl.h>
++#endif
+ #include <sys/prctl.h>
+ #include <sys/syscall.h>
+ #include <sys/uio.h>

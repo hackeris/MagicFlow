@@ -1,0 +1,12 @@
+--- pytorch/c10/util/Enumerate.h.~1~
++++ pytorch/c10/util/Enumerate.h
+@@ -6,6 +6,9 @@
+ 
+ #include <iterator>
+ #include <memory>
++#if defined(__linux__) && !defined(_WIN32)
++#include <sys/types.h> /* ssize_t: OHOS musl 头下 <iterator> 不间接暴露, 需显式 */
++#endif
+ 
+ #ifdef _WIN32
+ #include <basetsd.h> // @manual

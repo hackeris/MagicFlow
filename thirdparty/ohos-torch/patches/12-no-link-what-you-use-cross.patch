@@ -1,0 +1,12 @@
+--- pytorch/CMakeLists.txt.~1~
++++ pytorch/CMakeLists.txt
+@@ -75,7 +75,8 @@
+ endif()
+ 
+ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+-set(CMAKE_LINK_WHAT_YOU_USE TRUE)
++# G2 WA(patch 12): 交叉链不可用 — 关(见 build_torch_ohos.sh 头注释与 patches/12-*.patch)
++set(CMAKE_LINK_WHAT_YOU_USE FALSE)
+ 
+ # One variable that determines whether the current cmake process is being run
+ # with the main Caffe2 library. This is useful for building modules - if modules

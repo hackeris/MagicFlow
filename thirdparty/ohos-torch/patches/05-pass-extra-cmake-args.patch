@@ -1,0 +1,11 @@
+--- pytorch/tools/setup_helpers/cmake.py       2026-01-27 14:57:38.931540761 +0800
++++ pytorch/tools/setup_helpers/cmake.py       2026-01-27 15:01:24.610340253 +0800
+@@ -316,7 +316,7 @@
+             if true_var is not None:
+                 build_options[true_var] = val
+             elif var.startswith(("BUILD_", "USE_", "CMAKE_")) or var.endswith(
+-                ("EXITCODE", "EXITCODE__TRYRUN_OUTPUT")
++                ("EXITCODE", "EXITCODE__TRYRUN_OUTPUT", "_EXECUTABLE")
+             ):
+                 build_options[var] = val
+

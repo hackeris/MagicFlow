@@ -1,0 +1,13 @@
+--- pytorch/third_party/gloo/gloo/common/linux.cc.~1~	2025-06-13 19:42:43.381190931 +0800
++++ pytorch/third_party/gloo/gloo/common/linux.cc	2025-06-13 19:44:10.557356221 +0800
+@@ -37,6 +37,10 @@
+ #define SPEED_UNKNOWN 0
+ #endif
+ 
++#if !defined(__GLIBC__)
++typedef char *__caddr_t;
++#endif
++
+ namespace gloo {
+ 
+ const std::set<std::string>& kernelModules() {

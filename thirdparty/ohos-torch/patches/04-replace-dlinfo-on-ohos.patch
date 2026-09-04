@@ -1,0 +1,18 @@
+--- pytorch/third_party/tensorpipe/tensorpipe/common/dl.h      2026-01-27 16:24:38.219147825 +0800
++++ pytorch/third_party/tensorpipe/tensorpipe/common/dl.h      2026-01-27 16:35:39.442937093 +0800
+@@ -72,11 +72,15 @@
+
+   std::tuple<Error, std::string> getFilename() {
+     struct link_map* linkMap;
++#if defined(__OHOS__)
++    linkMap = reinterpret_cast<struct link_map *>(ptr_.get());
++#else
+     int rv = ::dlinfo(ptr_.get(), RTLD_DI_LINKMAP, &linkMap);
+     if (rv < 0) {
+       return std::make_tuple(
+           TP_CREATE_ERROR(DlError, ::dlerror()), std::string());
+     }
++#endif
+     std::array<char, PATH_MAX> path;
+     char* resolvedPath = ::realpath(linkMap->l_name, path.data());
+     if (resolvedPath == nullptr) {

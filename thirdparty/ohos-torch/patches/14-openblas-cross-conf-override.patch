@@ -1,0 +1,19 @@
+diff --git a/Makefile.system b/Makefile.system
+index ac278ba..30ab313 100644
+--- a/Makefile.system
++++ b/Makefile.system
+@@ -308,6 +308,14 @@ endif
+ 
+ ifndef TARGET_CORE
+ -include $(TOPDIR)/Makefile.conf
++# ── OHOS 交叉硬覆盖(2026-09-05, G4): prebuild 的 getarch 检测的是 HOST(x86_64/GCC),
++#    每次 make 都会重写 conf 为 host 配置 → FFLAGS 带 x86 flags → aarch64 gfortran 拒绝。
++#    在 include 后强制钉死交叉配置; 与本板构建验证 (TARGET=ARMV8 USE_THREAD=1) 绑定。
++override ARCH=arm64
++override CORE=ARMV8
++override C_COMPILER=CLANG
++override F_COMPILER=GFORTRAN
++override NO_EXPRECISION=1
+ else
+ HAVE_NEON=
+ HAVE_VFP=

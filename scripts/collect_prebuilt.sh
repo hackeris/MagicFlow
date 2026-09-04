@@ -41,6 +41,11 @@ src_dir() {
         scipy)    echo "$SKXY/usr/lib/python3.12/site-packages/scipy" ;;
         torch)    echo "$SKXY/usr/lib/python3.12/site-packages/torch/lib" ;;
         torch-root) echo "$SKXY/usr/lib/python3.12/site-packages/torch" ;;
+        # torch-ohos*: G2 自建 OpenBLAS 版(thirdparty/ohos-torch/build_torch_ohos.sh), 2026-09-04
+        torch-ohos) echo "$ROOT/build/torch-ohos-install/usr/lib/python3.12/site-packages/torch/lib" ;;
+        torch-ohos-root) echo "$ROOT/build/torch-ohos-install/usr/lib/python3.12/site-packages/torch" ;;
+        # sdklib: OHOS NDK 自带库(libc++_shared.so, __n1 系 —— 新 torch 链的 C++ 运行时)
+        sdklib)   echo "/apps/harmony/sdk/default/openharmony/native/llvm/lib/aarch64-linux-ohos" ;;
         usr-lib)  echo "$SKXY/usr/lib" ;;
         pybind11) echo "$SKXY/usr/include/pybind11" ;;
         pc-wheel) echo "$EXT/pc-wheel-extract" ;;

@@ -1,0 +1,9 @@
+--- pytorch/torch/utils/cpp_extension.py       2026-01-27 14:58:20.244024348 +0800
++++ pytorch/torch/utils/cpp_extension.py       2026-01-27 15:04:17.616695301 +0800
+@@ -39,7 +39,7 @@
+ SHARED_FLAG = '/DLL' if IS_WINDOWS else '-shared'
+
+ _HERE = os.path.abspath(__file__)
+-_TORCH_PATH = os.path.dirname(os.path.dirname(_HERE))
++_TORCH_PATH = os.environ.get('CROSS_TORCH_PATH') or os.path.dirname(os.path.dirname(_HERE))
+ TORCH_LIB_PATH = os.path.join(_TORCH_PATH, 'lib')

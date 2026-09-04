@@ -1,0 +1,16 @@
+--- pytorch/torch/headeronly/macros/Macros.h   2026-01-27 16:11:40.335953437 +0800
++++ pytorch/torch/headeronly/macros/Macros.h   2026-01-27 16:18:40.283919854 +0800
+@@ -469,8 +469,13 @@
+     __assert_fail(
+         const char* assertion,
+         const char* file,
++    #if defined(__GLIBC__)
+         unsigned int line,
+         const char* function) noexcept __attribute__((__noreturn__));
++    #else
++        int line,
++        const char* function) __attribute__((__noreturn__));
++    #endif
+
+ #endif // __SYCL_DEVICE_ONLY__
+ }

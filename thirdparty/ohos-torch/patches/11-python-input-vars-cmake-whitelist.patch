@@ -1,0 +1,11 @@
+--- pytorch/tools/setup_helpers/cmake.py
++++ pytorch/tools/setup_helpers/cmake.py
+@@ -317,7 +317,7 @@
+                 build_options[true_var] = val
+             elif var.startswith(("BUILD_", "USE_", "CMAKE_")) or var.endswith(
+                 ("EXITCODE", "EXITCODE__TRYRUN_OUTPUT", "_EXECUTABLE")
+-            ) or var in ("NATIVE_BUILD_DIR", "OpenBLAS_HOME", "BLAS_LIB"):
++            ) or var in ("NATIVE_BUILD_DIR", "OpenBLAS_HOME", "BLAS_LIB", "Python_INCLUDE_DIR", "Python_LIBRARY"):
+                 build_options[var] = val
+ 
+             if var in low_priority_aliases:

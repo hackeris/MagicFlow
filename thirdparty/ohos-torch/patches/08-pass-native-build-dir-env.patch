@@ -1,0 +1,11 @@
+--- /tmp/cmake.py.pre08	2026-09-04 19:19:07.644595666 +0800
++++ pytorch-src/tools/setup_helpers/cmake.py	2026-09-04 19:19:19.594816849 +0800
+@@ -317,7 +317,7 @@
+                 build_options[true_var] = val
+             elif var.startswith(("BUILD_", "USE_", "CMAKE_")) or var.endswith(
+                 ("EXITCODE", "EXITCODE__TRYRUN_OUTPUT", "_EXECUTABLE")
+-            ):
++            ) or var in ("NATIVE_BUILD_DIR", "OpenBLAS_HOME", "BLAS_LIB"):
+                 build_options[var] = val
+ 
+             if var in low_priority_aliases:

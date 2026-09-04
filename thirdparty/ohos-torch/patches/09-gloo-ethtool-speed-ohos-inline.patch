@@ -1,0 +1,12 @@
+--- pytorch/third_party/gloo/gloo/common/linux.cc.~1~
++++ pytorch/third_party/gloo/gloo/common/linux.cc
+@@ -239,7 +239,8 @@
+     return SPEED_UNKNOWN;
+   }
+ 
+-  return ethtool_cmd_speed(&edata);
++  // OHOS(uapi) 头无 ethtool_cmd_speed() inline — 手写等价式(同标准 inline: speed | speed_hi<<16)
++  return edata.speed | (edata.speed_hi << 16);
+ }
+ 
+ int getInterfaceSpeedByName(const std::string& ifname) {
