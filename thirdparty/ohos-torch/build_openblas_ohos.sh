@@ -103,6 +103,10 @@ ar t "$A" | grep -qx gfortran_concat_stub.o || "$LLVM/llvm-ar" q "$A" "$STUB_OBJ
 
 # ── 同步 lib/libopenblas.a(torch 静态链路径, 教训 e) ──
 mkdir -p "$SRC/lib" && cp -f "$A" "$SRC/lib/libopenblas.a"
+# ── 头文件装配(build_torch_ohos.sh 需 $SRC/include/openblas/cblas.h; 教训 g 2026-09-05:
+#    源树根 cblas.h 自带, include/openblas/ 布局须由本脚本产出, 否则 torch 构建次步 cp 即败) ──
+mkdir -p "$SRC/include/openblas"
+cp -f "$SRC/cblas.h" "$SRC/include/openblas/cblas.h"
 
 # ══ 穷举校验(教训补强: 不止抽样) ══
 echo ">> [2/3] 校验(穷举) ..."
