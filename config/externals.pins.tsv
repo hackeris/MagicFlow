@@ -16,3 +16,7 @@ python312.zip	anchor	-	c85acd6304052d3a255bd435af8ef71d39ba9fdbf82540b0e68a4521b
 
 pydantic_core-aarch64-musl.whl	url	https://pypi.org/packages/py3/p/pydantic-core/pydantic_core-2.46.5-cp312-cp312-musllinux_1_1_aarch64.whl	efd62a42486f1bda5d24cb4f63d15a3c7768375fe83d36f9417b4ad7a2fb20b3	2158408	pydantic_core Rust 内核(PyPI musllinux_1_1_aarch64,matching skh 栈);解包出 _pydantic_core...musl.so + .libs/libgcc_s-0bf60adc.so.1 走 prebuilt;本地副本 /tmp/wheels/pydantic_core-2.46.5-cp312-cp312-musllinux_1_1_aarch64.whl
 
+pytorch-src	git	https://github.com/pytorch/pytorch.git	449b1768410104d3ed79d3bcfe4ba1d65c7f22c0	-	G4 复现链补 pin(2026-09-05): v2.10.0 tag commit=449b176; fetch 全量 clone --branch v2.10.0 + submodule update --recursive(37 子模块); 补丁 01-12 由 build_torch_ohos.sh 应用
+openblas-src	git	https://github.com/OpenMathLib/OpenBLAS.git	8795fc7985635de1ecf674b87e2008a15097ffab	-	v0.3.29 tag commit=8795fc7; fetch clone --branch v0.3.29; 补丁 13/14 由 build_openblas_ohos.sh 应用; 旧 externals/openblas(本地态)仅作 local repo 回退
+py312-host	url	https://www.python.org/ftp/python/3.12.7/Python-3.12.7.tgz	73ac8fe780227bf371add8373c3079f42a0dc62deff8d612cd15a618082ab623	27016272	host python3.12 源码 tar(src 自编→/opt/py312; SOABI=cpython-312 与设备解释器成套; build_torch_ohos.sh 跑 setup.py 用); 编译由 scripts/bootstrap_worktree.sh 负责; 本机 /opt/py312 即由此 tar 编出
+

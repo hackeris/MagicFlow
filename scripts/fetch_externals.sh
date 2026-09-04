@@ -221,6 +221,52 @@ check_zip_anchor() {
     fi
 }
 
+# ─────────────────────────────── ⑦ G4 源码三件套（pytorch/openblas/host-py312） ───────────────────────────────
+# 2026-09-05 G4 定谳补 pin: build_torch_ohos.sh / build_openblas_ohos.sh 的源码输入,
+#   原本只存在研究区 externals/ 本地状态(未 pin) → 全链复现断点; 现入表并自动 fetch。
+fetch_pytorch_src() {
+    log "⑦ pytorch-src v2.10.0 @$(pin_get pytorch-src sha256 | cut -c1-7)"
+    local SRC="$EXT/pytorch-src"
+    if [ -d "$SRC/.git" ] && git -C "$SRC" rev-parse HEAD 2>/dev/null | grep -q "$(pin_get pytorch-src sha256)" \
+       && [ "$(git -C "$SRC" submodule status 2>/dev/null | wc -l)" = "37" ]; then
+        log "  [SKIP]"; return
+    fi
+    [ "$OFFLINE" = 1 ] && die "⑦ --offline 无 pytorch 源码"
+    rm -rf "$SRC"
+    git clone --branch v2.10.0 "$(pin_get pytorch-src url)" "$SRC"
+    git -C "$SRC" submodule update --init --recursive --depth 1
+    git -C "$SRC" checkout -q "$(pin_get pytorch-src sha256)" 2>/dev/null || {
+        git -C "$SRC" fetch -q --tags && git -C "$SRC" checkout -q "$(pin_get pytorch-src sha256)"
+    }
+    log "  [OK] $(git -C "$SRC" rev-parse --short HEAD) submodules=$(git -C "$SRC" submodule status 2>/dev/null | wc -l)"
+}
+
+fetch_openblas_src() {
+    log "⑦ openblas-src v0.3.29 @$(pin_get openblas-src sha256 | cut -c1-7)"
+    local SRC="$EXT/openblas-src"
+    if [ -d "$SRC/.git" ] && git -C "$SRC" rev-parse HEAD 2>/dev/null | grep -q "$(pin_get openblas-src sha256)"; then
+        log "  [SKIP]"; return
+    fi
+    [ "$OFFLINE" = 1 ] && die "⑦ --offline 无 openblas 源码"
+    rm -rf "$SRC"
+    git clone --branch v0.3.29 "$(pin_get openblas-src url)" "$SRC"
+    log "  [OK] $(git -C "$SRC" rev-parse --short HEAD)"
+}
+
+fetch_py312_host() {
+    log "⑦ host py312 源码 tar（src 自编 → /opt/py312）"
+    local WH="$EXT/py312/Python-3.12.7.tgz"
+    if check_file "$WH" "$(pin_get py312-host sha256)" "$(pin_get py312-host size)" 2>/dev/null; then
+        log "  [SKIP]"; return
+    fi
+    [ "$OFFLINE" = 1 ] && die "⑦ --offline 无 py312 tar"
+    mkdir -p "$EXT/py312"
+    curl -fsSL -o "$EXT/py312/.part" "$(pin_get py312-host url)"
+    mv "$EXT/py312/.part" "$WH"
+    check_file "$WH" "$(pin_get py312-host sha256)" "$(pin_get py312-host size)" || die "⑦ py312 tar 校验失败"
+    log "  [OK] 27MB tar 落地 $WH（configure 编译由 bootstrap_worktree.sh 做）"
+}
+
 # ───────────────────────────────────── 主流程 ─────────────────────────────────────
 # 幂等在每个 fetch_* 内部完成（目标存在性+sha+stamp 全命中才跳）；失败即记录到 FAILED,末尾汇总 exit 1。
 FAILED=""
@@ -230,6 +276,9 @@ run_or_fail frontend     fetch_frontend
 run_or_fail comfyui-src  fetch_comfyui_src
 run_or_fail py-site      fetch_pysite
 run_or_fail pc-wheel     fetch_pydantic_wheel
+run_or_fail pytorch-src  fetch_pytorch_src
+run_or_fail openblas-src fetch_openblas_src
+run_or_fail py312-host   fetch_py312_host
 check_zip_anchor
 
 if [ -n "$FAILED" ]; then
