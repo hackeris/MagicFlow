@@ -8,7 +8,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="$ROOT/build/repro"
 mkdir -p "$LOG_DIR"
 step() { echo -e "\n\033[32m==== STEP $1: $2 ====\033[0m"; }
-run() { local tag="$1"; shift; echo ">>> $*"; "$@" 2>&1 | tee "$LOG_DIR/$tag.log"; }
+# ⚠ 每步显式判失败(管道 tee + pipefail 已够,但再防一层): 失败即停并留可 grep 的标记
+run() { local tag="$1"; shift; echo ">>> $*"; "$@" 2>&1 | tee "$LOG_DIR/$tag.log" || {
+    echo -e "\033[31mSTEP $tag FAILED (见 $LOG_DIR/$tag.log)\033[0m"; exit 1; }; }
 
 step "1/7" "fetch(外部输入)"
 run 01_fetch   make fetch

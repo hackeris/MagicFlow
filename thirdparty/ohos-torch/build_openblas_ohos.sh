@@ -130,7 +130,9 @@ nm "$A" 2>/dev/null | grep -w _gfortran_concat_string || { echo "FATAL: gfortran
 nm "$A" 2>/dev/null | grep -w gotoblas_init || { echo "FATAL: gotoblas_init 缺失"; exit 1; }
 
 echo "-- syscall 扫描(mbind 必须为 0) --"
-MBIND=$(nm "$A" 2>/dev/null | grep -c "SYS_mbind")
+# ⚠ 教训(2026-09-05 复现链踩坑): grep -c 无匹配时 rc=1 → var=$(cmd 替换) 在 set -e 下
+#   直接退出!必须 `|| true`(要的就是"计数=0"),否则校验段静默闷死(grep 的 rc 被赋值吞)。
+MBIND=$(nm "$A" 2>/dev/null | grep -c "SYS_mbind" || true)
 [ "$MBIND" -eq 0 ] || { echo "FATAL: 仍有 SYS_mbind 引用($MBIND); 补丁 13 未生效"; exit 1; }
 echo "  [OK] mbind 引用=0"
 
