@@ -1,0 +1,15 @@
+diff --git a/tools/setup_helpers/cmake.py b/tools/setup_helpers/cmake.py
+index 88f0fe5d309..8f11051f979 100644
+--- a/tools/setup_helpers/cmake.py
++++ b/tools/setup_helpers/cmake.py
+@@ -316,8 +316,8 @@ class CMake:
+             if true_var is not None:
+                 build_options[true_var] = val
+             elif var.startswith(("BUILD_", "USE_", "CMAKE_")) or var.endswith(
+-                ("EXITCODE", "EXITCODE__TRYRUN_OUTPUT")
+-            ):
++                ("EXITCODE", "EXITCODE__TRYRUN_OUTPUT", "_EXECUTABLE")
++            ) or var in ("NATIVE_BUILD_DIR", "OpenBLAS_HOME", "BLAS_LIB", "Python_INCLUDE_DIR", "Python_LIBRARY"):
+                 build_options[var] = val
+ 
+             if var in low_priority_aliases:

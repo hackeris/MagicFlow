@@ -40,11 +40,22 @@ SLEEF_NATIVE=/opt/sleef-native
 EXT_DIR="$(dirname "$SRC")"
 if [ ! -e "$EXT_DIR/pytorch" ]; then ln -s "$(basename "$SRC")" "$EXT_DIR/pytorch"; fi
 cd "$EXT_DIR"
+# 06-CROSS_TORCH_PATH: G2 正主实验证明非必需(其 tree 同样未应用, 构建成功; 且其 hunk
+#   基线不适用于本 pin 树) → 循环显式跳过(2026-09-05)。
+SKIP_PATCH="06-add-CROSS_TORCH_PATH-for-torch-cpp-extension-build.patch"
 for p in "$PATCH_DIR"/*.patch; do
+  [ "$(basename "$p")" = "$SKIP_PATCH" ] && { echo "  [PATCH] skip(非必需): $(basename "$p")"; continue; }
   [ -f "$EXT_DIR/pytorch/.patch-$(basename "$p").done" ] && continue
-  patch -p0 -d "$EXT_DIR" --forward < "$p" -r - || true   # 已应用报 skip 视为完成
-  touch "$EXT_DIR/pytorch/.patch-$(basename "$p").done"
-  echo "  [PATCH] applied $(basename "$p")"
+  # ⚠ 2026-09-05 复现链教训: 不得 `|| true` 吞错+无条件 touch done —— patch 失败曾被打上
+  #   假 done(08/11), 导致 cmake 环境白名单缺失(NATIVE_BUILD_DIR→/bin/mkdisp 即死)。
+  #   失败必须 FATAL(天然幂等: 已应用则 patch 本应跳过?不——已应用的 hunk 会告 skip,
+  #   由 reverse 判定: 已应用即返回 0, 故失败=真失败)。
+  if patch -p0 -d "$EXT_DIR" --forward < "$p" -r -; then
+    touch "$EXT_DIR/pytorch/.patch-$(basename "$p").done"
+    echo "  [PATCH] applied $(basename "$p")"
+  else
+    echo "  FATAL: patch $(basename "$p") 应用失败(基线漂移?) —— 请检查 git apply --check"; exit 1
+  fi
 done
 
 # ── 0.4) host py 依赖(numpy; CMake 的 Python check 缺 Development.Module/NumPy 时强制 BUILD_PYTHON=OFF
