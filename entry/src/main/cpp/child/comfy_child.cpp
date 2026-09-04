@@ -22,6 +22,7 @@
 #include <sys/time.h>
 #include <dlfcn.h>
 #include <sys/stat.h>  // stat(): pyc-mtime-prop(Step0/优化#1) 采样树文件 mtime
+#include <string>      // std::string: torch 线程数 env 构造（run101 多核解锁）
 #include <cstdlib>
 #include <cstdio>
 #include <limits.h>
@@ -988,11 +989,30 @@ static void dlopen_python_check(const char *entryParams)
         //   - OMP_WAIT_POLICY=PASSIVE：libomp 等待线程由「忙等自旋」改为「阻塞」—— 直击主线程烧 CPU 元凶。
         //   - TORCH_NUM_INTEROP_THREADS=1：interop 池默认=CPU 核数，受限环境起多线程易拖死。
         //   - OMP_THREAD_LIMIT/GOMP_SPINCOUNT：进一步禁用自旋。
-        setenv("OMP_NUM_THREADS", "1", 1);
-        setenv("MKL_NUM_THREADS", "1", 1);
-        setenv("TORCH_NUM_THREADS", "1", 1);
-        setenv("TORCH_NUM_INTEROP_THREADS", "1", 1);
-        setenv("OMP_THREAD_LIMIT", "1", 1);
+        // 2026-09-04 run101 本地推理第 3 轮:解锁多核(用户研判「单线程锁死」正确)。
+        //   OMP=1 是 runXX 时代「嵌入自旋卡桩」的历史对策;SD-Turbo 推理在 OMP=1 下
+        //   实测 ~1.17 核/40min+ 未完成 —— 不可用。「被杀」两轮(50min steps4 / steps1-150s)
+        //   均发生在 OMP=1 状态,说明系统杀进程与 CPU 峰值无关 → 全核并行, 快 6-10×。
+        //   按 sysconf 动态取在线核数(12GB 平板, Pad 核数未知以 OS 为准; 兜底 8)。
+        {
+            long _nc = sysconf(_SC_NPROCESSORS_ONLN);
+            if (_nc < 1) _nc = 8;
+            char _thr[16];
+            snprintf(_thr, sizeof(_thr), "%ld", _nc);
+            setenv("OMP_NUM_THREADS", _thr, 1);
+            setenv("MKL_NUM_THREADS", _thr, 1);
+            setenv("OMP_WAIT_POLICY", "PASSIVE", 1);
+            setenv("OMP_THREAD_LIMIT", _thr, 1);
+            setenv("TORCH_NUM_INTEROP_THREADS", "2", 1);
+            printf("[OHOS] torch threads=all(%s)\n", _thr);
+        }
+        // run101 定谳: 历史"自旋缓解"块中最毒三行 —— TORCH_NUM_THREADS=1 /
+        //   TORCH_NUM_INTEROP_THREADS=1 / OMP_THREAD_LIMIT="1" 把 libomp 线程池
+        //   开局 clamp 死成 1(实测 torch.get_num_threads()=1, 12 核设备 17 分钟+ 一张
+        //   512 图, 2 轮系统杀进程)。torch 为 PARALLEL_OPENMP(见 libtorch_cpu.so 符号
+        //   U omp_set_num_threads@VERSION + libs/ 真 libomp.so, 读数服从 OMP_NUM_THREADS)
+        //   —— 已改由上方 sysconf 块设 OMP/MKL/THREAD_LIMIT=全部核。2019-09-04 移除, 保留
+        //   自旋缓解(其余行不动: PASSIVE/GOMP_SPINCOUNT 直击 libomp 等待空转)。
         setenv("OMP_DYNAMIC", "FALSE", 1);
         setenv("OMP_WAIT_POLICY", "PASSIVE", 1);
         setenv("GOMP_SPINCOUNT", "0", 1);
@@ -1316,10 +1336,15 @@ extern "C" void Main(NativeChildProcess_Args args)
                          "        return None\n"
                          "_p_sys.meta_path.insert(0, _Thr())\n"
                          "import os as _p_os\n"
-                         "_p_os.environ['OMP_NUM_THREADS'] = '1'\n"
-                         "_p_os.environ['MKL_NUM_THREADS'] = '1'\n"
-                         "_p_os.environ['OPENBLAS_NUM_THREADS'] = '1'\n"
-                         "_p_os.environ['NUMEXPR_NUM_THREADS'] = '1'\n"
+                         // run101 定谳(2026-09-04): 原"单化=全部 '1'"的防御建立于错误归因
+                         //   —— 当初"多核满载 2s 即死"实为 cpuset=background 的进程
+                         //   CPU 配额(80%/单核/10min)过期杀, 非多核本身; 前台 top-app
+                         //   无该配额(实测 Cpus_allowed=12 全核, 进程存活)。torch 池
+                         //   在以下 env 值初始化 —— 改为全部在线核数, 推理提速 ~10×。
+                         "_p_os.environ['OMP_NUM_THREADS'] = str(_p_os.cpu_count() or 8)\n"
+                         "_p_os.environ['MKL_NUM_THREADS'] = str(_p_os.cpu_count() or 8)\n"
+                         "_p_os.environ['OPENBLAS_NUM_THREADS'] = str(_p_os.cpu_count() or 8)\n"
+                         "_p_os.environ['NUMEXPR_NUM_THREADS'] = str(_p_os.cpu_count() or 8)\n"
                          "import gc as _p_gc\n"
                          "print('RUN37-THR-OK env=' + _p_os.environ['OMP_NUM_THREADS'] + '-' + _p_os.environ['MKL_NUM_THREADS'], flush=True)\n"
                          "import threading, urllib.request, time\n"

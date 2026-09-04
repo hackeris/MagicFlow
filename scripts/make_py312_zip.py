@@ -604,6 +604,33 @@ def main():
                         continue
                     rel = os.path.relpath(os.path.join(root, f), sroot).replace(os.sep, "/")
                     arc = f"{arc_prefix}/{rel}"
+                    # run102（2026-09-04）torch 线程探针: cpuset=top-app(12核) 下推理
+                    #   采样仍 ~1 核, 让 torch 自报线程配置(TORCH-THR 行打印于进程 stdout)。
+                    if arc == "comfyui/comfy/utils.py":
+                        with open(os.path.join(root, f), encoding="utf-8") as _df:
+                            _uc = _df.read()
+                        _probe = ('\ntry:\n'
+                                  '    import torch as _t, os as _po\n'
+                                  '    _bn = _t.get_num_threads()\n'
+                                  '    _bi = _t.get_num_interop_threads()\n'
+                                  '    _pr = _po.path.dirname(_po.path.dirname(_po.path.dirname(\n'
+                                  '        _po.path.abspath(__file__))))\n'
+                                  '    with open(_po.path.join(_pr, "thr-probe.log"), "w") as _pf:\n'
+                                  '        _pf.write("n=%d interop=%d cpu_count=%d\\n" % '
+                                  '(_bn, _bi, _po.cpu_count()))\n'
+                                  '        _pf.write("env_OMP=%r env_MKL=%r env_TORCHN=%r env_TORCHI=%r env_LIMIT=%r\\n" % (\n'
+                                  '            _po.environ.get("OMP_NUM_THREADS"),\n'
+                                  '            _po.environ.get("MKL_NUM_THREADS"),\n'
+                                  '            _po.environ.get("TORCH_NUM_THREADS"),\n'
+                                  '            _po.environ.get("TORCH_NUM_INTEROP_THREADS"),\n'
+                                  '            _po.environ.get("OMP_THREAD_LIMIT")))\n'
+                                  'except BaseException as _pe:\n'
+                                  '    print("THR-PROBE-ERR %r" % (_pe,), flush=True)\n')
+                        z.writestr(arc, _uc + _probe)
+                        count += 1
+                        total += len(_uc) + len(_probe)
+                        print("  [PROBE] comfy/comfy/utils.py 注入 torch 线程探针(run102)")
+                        continue
                     # run77：comfy_aimdo/torch.py 整文件换降级壳（见 AIMDO_TORCH_STUB 注）——
                     # 原版顶层 CUDA 惰性链断言，留着即死；此处替换保证 zip 内唯一条目。
                     if arc.endswith("site-packages/comfy_aimdo/torch.py"):

@@ -115,7 +115,11 @@ STUB_SECT = [
     'comfy.ldm.sensenova.model', 'comfy.ldm.sensenova.sampling',
     'comfy.ldm.depth_anything_3.model',
     # sd.py (25)
-    'comfy.ldm.models.autoencoder', 'comfy.ldm.cascade.stage_a',
+    # ⚠ 2026-09-04 本地推理验证: 'comfy.ldm.models.autoencoder' 已从名单移除 ——
+    #   SD-Turbo/SD1.5 VAE 构造(comfy/sd.py VAE.__init__ → AutoencoderKL)需要真身;
+    #   名单化时整模块占位 → '_StubCls' object is not iterable. import 链全真身(同
+    #   stub_global.py 注释),放行即活. 其余 VAE/模型族与 SD-Turbo 无关,保持 stub.
+    'comfy.ldm.cascade.stage_a',
     'comfy.ldm.cascade.stage_c_coder', 'comfy.ldm.audio.autoencoder',
     'comfy.ldm.genmo.vae.model', 'comfy.ldm.lightricks.vae.causal_video_autoencoder',
     'comfy.ldm.lightricks.vae.na_diffusion_decoder', 'comfy.ldm.lightricks.vae.audio_vae',
