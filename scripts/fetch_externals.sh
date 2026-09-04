@@ -233,7 +233,9 @@ fetch_pytorch_src() {
     fi
     [ "$OFFLINE" = 1 ] && die "⑦ --offline 无 pytorch 源码"
     rm -rf "$SRC"
-    git clone --branch v2.10.0 "$(pin_get pytorch-src url)" "$SRC"
+    # ⚠ 必须浅克隆(主仓): pin commit=v2.10.0 tag 头, 浅 HEAD 即匹配;
+    #   git apply 补丁不需历史。全量=4.1GB(实测), 浅克隆≈2GB(省一半——2026-09-05 用户纠偏)。
+    git clone --branch v2.10.0 --depth 1 "$(pin_get pytorch-src url)" "$SRC"
     git -C "$SRC" submodule update --init --recursive --depth 1
     git -C "$SRC" checkout -q "$(pin_get pytorch-src sha256)" 2>/dev/null || {
         git -C "$SRC" fetch -q --tags && git -C "$SRC" checkout -q "$(pin_get pytorch-src sha256)"
