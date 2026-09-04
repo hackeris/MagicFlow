@@ -119,6 +119,11 @@ CLT 6.1.1.280 / hvigor 6.24.2（**官方原版**，md5 `705309b0…`）/ SDK 6.1
   不再逐轮回归测时（延续「单轮单变量/不折腾」纪律）。曾在设备上否定过的路线（留档）：运行期
   自动写 `__pycache__`（去 PYTHONDONTWRITEBYTECODE）→ 首启 ~5 分钟,已回退,注释在
   `comfy_child.cpp`。
+- **本地推理并行限制（2026-09-04 定谳, 证据集见 `docs/local-inference-torch-parallel.md`）**：
+  设备已可本地出图（SD-Turbo 256×256×1 步 7.6 分钟实测成功）,但 op 层单线程——根因 = skh torch
+  构建 BLAS=Eigen(单线程 GEMM), `torch.set_num_threads` 不作用于 Eigen；修复候选 = 重编换
+  `USE_BLAS=OpenBLAS`（skh 发行树自带 libopenblas.a+头）。同时 cpuset 机制：app 非焦点（后台）
+  = cpuset:background（3 小核 + 10min 单核>80% 配额 == 系统杀进程两轮实锤）；焦点 = top-app（12 核）。
 
 ## 5. 双区协同（重要）
 
