@@ -39,16 +39,17 @@ command -v aarch64-linux-gnu-gfortran >/dev/null || { echo "FATAL: 缺 aarch64-l
 [ -f "$STUB" ] || { echo "FATAL: 缺 gfortran stub: $STUB"; exit 1; }
 
 cd "$SRC"
-# ── 幂等打补丁(已应用则 skip, 状态异常则报错) ──
-for p in 13-openblas-ohos-numa-noop.patch 14-openblas-cross-conf-override.patch; do
-  if ! git -C "$SRC" apply --check "$PATCH_DIR/$p" 2>/dev/null; then
-    if git -C "$SRC" apply --reverse --check "$PATCH_DIR/$p" 2>/dev/null; then
+# ── 幂等打补丁(2026-09-05 归类: 只取 patches/openblas/ 目录; 已应用则 skip, 状态异常则报错) ──
+for p in "$PATCH_DIR"/openblas/*.patch; do
+  p="$(basename "$p")"
+  if ! git -C "$SRC" apply --check "$PATCH_DIR/openblas/$p" 2>/dev/null; then
+    if git -C "$SRC" apply --reverse --check "$PATCH_DIR/openblas/$p" 2>/dev/null; then
       echo "  [PATCH] already applied: $p"
     else
       echo "FATAL: 补丁 $p 无法应用(源码状态异常)"; exit 1
     fi
   else
-    git -C "$SRC" apply "$PATCH_DIR/$p"
+    git -C "$SRC" apply "$PATCH_DIR/openblas/$p"
     echo "  [PATCH] applied: $p"
   fi
 done

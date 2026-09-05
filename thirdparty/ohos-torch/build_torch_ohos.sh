@@ -40,11 +40,11 @@ SLEEF_NATIVE=/opt/sleef-native
 EXT_DIR="$(dirname "$SRC")"
 if [ ! -e "$EXT_DIR/pytorch" ]; then ln -s "$(basename "$SRC")" "$EXT_DIR/pytorch"; fi
 cd "$EXT_DIR"
-# 06-CROSS_TORCH_PATH: G2 正主实验证明非必需(其 tree 同样未应用, 构建成功; 且其 hunk
-#   基线不适用于本 pin 树) → 循环显式跳过(2026-09-05)。
+# 补丁已按目标树分家(2026-09-05 用户纠偏): patches/torch/(01-12+08c) ↔ patches/openblas/(13-14)。
+#   本循环只扫 torch/; 06-CROSS_TORCH_PATH 例外(非必需且基线与 pin 树不符 → 显式 skip)。
 SKIP_PATCH="06-add-CROSS_TORCH_PATH-for-torch-cpp-extension-build.patch"
-for p in "$PATCH_DIR"/*.patch; do
-  [ "$(basename "$p")" = "$SKIP_PATCH" ] && { echo "  [PATCH] skip(非必需): $(basename "$p")"; continue; }
+for p in "$PATCH_DIR"/torch/*.patch; do
+  case " $SKIP_PATCH " in *" $(basename "$p") "*) echo "  [PATCH] skip(非必需): $(basename "$p")"; continue;; esac
   [ -f "$EXT_DIR/pytorch/.patch-$(basename "$p").done" ] && continue
   # ⚠ 2026-09-05 复现链教训: 不得 `|| true` 吞错+无条件 touch done —— patch 失败曾被打上
   #   假 done(08/11), 导致 cmake 环境白名单缺失(NATIVE_BUILD_DIR→/bin/mkdisp 即死)。
