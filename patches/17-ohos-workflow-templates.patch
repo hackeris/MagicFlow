@@ -1,9 +1,389 @@
+diff --git a/server.py b/server.py
+index c9ffcaa..2845ab1 100644
+--- a/server.py
++++ b/server.py
+@@ -1,5 +1,7 @@
+ import errno
+ import os
++import hashlib
++import shutil
+ import sys
+ import asyncio
+ import traceback
+@@ -156,6 +158,224 @@ def is_loopback(host):
+     return loopback
+ 
+ 
++# OHOS_MODEL_DL v1 — 模型下载端点驱动力(W3, docs/model-download.md)。
++#   职责: 后端"下载器"(官方 Desktop 里它在 Electron 壳层; 我们放 server 内, 供前端
++#   electronDownloadStore/missingModelDownload 的 web 分支驱动)。host 白名单与后缀
++#   白名单同步自前端 missingModelDownload.ts(改任一侧须同步)。
++#   目录侧: dest 目录取 folder_names_and_paths[directory][0][0](extra_model_paths.yaml
++#   is_default=true 时即用户可见的 Download/models), 最小校验 + staging 原子落盘。
++OHOS_DL_HOSTS = frozenset({
++    "huggingface.co", "civitai.com", "civitai.red", "github.com",
++    "127.0.0.1", "localhost",  # 回环: rport 隧道下载(开发/验证)与自举
++})
++OHOS_DL_SUFFIXES = (".safetensors", ".sft", ".ckpt", ".pth", ".pt")
++OHOS_DL_CATALOG = [
++    {"id": "sd-turbo", "name": "sd_turbo.safetensors", "directory": "checkpoints",
++     "url": "https://huggingface.co/stabilityai/sd-turbo/resolve/main/sd_turbo.safetensors",
++     "size_bytes": 0, "tier": "required",
++     "description": "SD-Turbo 256×256 2步; 低内存设备基线(设备预配)"},
++    {"id": "sd-vae-ft-mse", "name": "vae-ft-mse-840000-ema-pruned.safetensors",
++     "directory": "vae",
++     "url": "https://huggingface.co/stabilityai/sd-vae-ft-mse-original/resolve/main/vae-ft-mse-840000-ema-pruned.safetensors",
++     "size_bytes": 0, "tier": "optional", "description": "偏好 VAE(512 模板备用)"},
++    {"id": "sd15", "name": "v1-5-pruned-emaonly.safetensors", "directory": "checkpoints",
++     "url": "https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors",
++     "size_bytes": 0, "tier": "optional",
++     "description": "SD1.5 完整权重(~4.3GB, 大/慢; 低内存设备建议仅 sd-turbo)"},
++    {"id": "realesrgan-x4plus", "name": "RealESRGAN_x4plus.pth", "directory": "upscale_models",
++     "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
++     "size_bytes": 67040989, "tier": "optional", "description": "4x 放大(Real-ESRGAN)"},
++]
++_OHOS_DL_TASKS: dict = {}          # task_id -> task dict(内存态; cap 见 _trim)
++_OHOS_DL_LOCK = asyncio.Lock()
++_OHOS_DL_MAX_HISTORY = 100
++
++
++class _OhosDlError(Exception):
++    def __init__(self, code, message):
++        self.code = code
++        self.message = message
++
++
++def _ohos_dl_catalog():
++    mirror = os.environ.get("OHOS_CATALOG_MIRROR", "").strip().rstrip("/")
++    out = []
++    for e in OHOS_DL_CATALOG:
++        e = dict(e)
++        if mirror:
++            e["url"] = mirror + "/" + os.path.basename(e["url"].split("?")[0])
++        out.append(e)
++    return out
++
++
++def _ohos_dl_validate_url(raw_url):
++    u = urllib.parse.urlparse(raw_url)
++    if u.scheme not in ("http", "https"):
++        raise _OhosDlError("INVALID_URL", "scheme must be http/https")
++    host = (u.hostname or "").lower()
++    if host not in OHOS_DL_HOSTS:
++        raise _OhosDlError("INVALID_URL", f"host {host!r} not allowlisted")
++    if not u.path or u.path in ("/", ""):
++        raise _OhosDlError("INVALID_URL", "missing path")
++    return raw_url
++
++
++def _ohos_dl_validate_filename(raw_name, dest_dir):
++    if raw_name != os.path.basename(raw_name) or ".." in raw_name:
++        raise _OhosDlError("INVALID_FILENAME", "basename required, '..' rejected")
++    if len(raw_name) > 128 or not raw_name.lower().endswith(OHOS_DL_SUFFIXES):
++        raise _OhosDlError("INVALID_FILENAME", "name too long or bad suffix")
++    full = os.path.realpath(os.path.join(dest_dir, raw_name))
++    if not folder_paths.is_within_directory(dest_dir, full):
++        raise _OhosDlError("INVALID_FILENAME", "escapes dest dir")
++    return raw_name
++
++
++def _ohos_dl_cleanup_stale(dest_dir, active_ids):
++    # 进程崩溃残留的 .ohosdl-* part(失败/中断未清): 本目录内非活动中任务名全部删除。
++    if not os.path.isdir(dest_dir):
++        return
++    for f in os.listdir(dest_dir):
++        if f.endswith(".part") and ".ohosdl-" in f:
++            tail = f.rsplit(".ohosdl-", 1)[-1].removesuffix(".part")
++            if tail not in active_ids:
++                try:
++                    os.remove(os.path.join(dest_dir, f))
++                except OSError:
++                    pass
++
++
++def _ohos_dl_trim():
++    while len(_OHOS_DL_TASKS) > _OHOS_DL_MAX_HISTORY:
++        oldest = min(_OHOS_DL_TASKS, key=lambda k: _OHOS_DL_TASKS[k].get("created_at", 0))
++        if _OHOS_DL_TASKS[oldest]["status"] not in ("pending", "in_progress", "paused"):
++            _OHOS_DL_TASKS.pop(oldest)
++        else:
++            break
++
++
++class OHOSModelDownloader:
++    """单任务下载器: 流式写 part(目录内隐藏名), 可选 sha 校验, os.replace 原子落盘。
++    状态机与并发控制见 _OHOS_DL_TASKS 与端点闭包; pause 只停读(part 保留),
++    resume 从头重拉(第一版不续传, 文档注明)。"""
++
++    @staticmethod
++    def new_task(url, directory, filename, sha256=None):
++        dest_dir = folder_paths.folder_names_and_paths[directory][0][0]
++        os.makedirs(dest_dir, exist_ok=True)
++        task_id = uuid.uuid4().hex[:16]
++        td = {
++            "task_id": task_id,
++            "url": url,
++            "directory": directory,
++            "filename": filename,
++            "dest_dir": dest_dir,
++            "dest": os.path.join(dest_dir, filename),
++            "part": os.path.join(dest_dir, f".{filename}.ohosdl-{task_id[:8]}.part"),
++            "status": "pending",
++            "bytes_received": 0, "bytes_total": 0, "speed_bps": 0,
++            "error": None,
++            "created_at": time.time(), "updated_at": time.time(),
++            "sha256": (sha256 or "").lower() or None,
++            "_samples": [], "_ts": None,
++        }
++        _ohos_dl_cleanup_stale(dest_dir, set(_OHOS_DL_TASKS) | {task_id})
++        return td
++
++    @staticmethod
++    def task_view(td):
++        t = {k: v for k, v in td.items() if not k.startswith("_")}
++        return t
++
++    # v2(2026-09-05 真机定谳): aiohttp 引擎退场 —— 设备上 aiohttp 请求触发
++    #   asyncio 超时守卫(RuntimeError: Timeout should be used inside a task,
++    #   设备 3.12 stdlib asyncio/timeouts.py, 报错时 bytes=0/5ms 瞬时)——
++    #   下载工作线程化, stdlib urllib 流式; 状态机/字段/清理逻辑与 v1 语义一致。
++    #   同步变更: fetch_externals.sh 证据串仍为 "OHOS_MODEL_DL v1"(见头注释)。
++    @staticmethod
++    def _dl_sync(td):
++        import urllib.request
++        import urllib.error
++        try:
++            req = urllib.request.Request(td["url"], headers={"User-Agent": "comfyui-ohos-w3"})
++            resp = urllib.request.urlopen(req, timeout=120)
++            code = getattr(resp, "status", getattr(resp, "code", 200))
++            if code in (401, 403, 451):
++                raise _OhosDlError(f"HTTP_{code}", "gated or forbidden by source")
++            if code != 200:
++                raise _OhosDlError("NETWORK", f"http {code} from source")
++            td["bytes_total"] = int(resp.headers.get("Content-Length") or 0)
++            h = hashlib.sha256()
++            with open(td["part"], "wb") as f:
++                while True:
++                    if td["status"] == "cancelled":
++                        raise _OhosDlError("CANCELLED", "cancelled")
++                    while td["status"] == "paused":
++                        time.sleep(0.25)
++                        if td["status"] == "cancelled":
++                            raise _OhosDlError("CANCELLED", "cancelled")
++                    chunk = resp.read(64 * 1024)
++                    if not chunk:
++                        break
++                    h.update(chunk)
++                    f.write(chunk)
++                    f.flush()
++                    td["bytes_received"] += len(chunk)
++                    now = time.time()
++                    if td["_ts"] is None or now - td["_ts"] >= 0.5:
++                        td["_samples"].append((now, td["bytes_received"]))
++                        td["_samples"] = td["_samples"][-3:]
++                        td["_ts"] = now
++                        if len(td["_samples"]) >= 2:
++                            (t0, b0), (t1, b1) = td["_samples"][0], td["_samples"][-1]
++                            if t1 > t0:
++                                td["speed_bps"] = int((b1 - b0) / (t1 - t0))
++                        td["updated_at"] = now
++            if td["sha256"] and h.hexdigest() != td["sha256"]:
++                raise _OhosDlError("SHA_MISMATCH", "sha256 mismatch (staging removed)")
++            os.replace(td["part"], td["dest"])
++            td["status"] = "completed"
++            td["bytes_received"] = td["bytes_total"] or td["bytes_received"]
++            td["speed_bps"] = 0
++            td["updated_at"] = time.time()
++        except _OhosDlError as e:
++            td["status"] = "error" if e.code != "CANCELLED" else "cancelled"
++            td["error"] = {"code": e.code, "message": e.message}
++            _ohos_dl_cleanup_stale(td["dest_dir"], set(_OHOS_DL_TASKS) | {td["task_id"]})
++        except urllib.error.HTTPError as e:
++            td["status"] = "error"
++            td["error"] = {"code": "HTTP_" + str(e.code), "message": str(e)}
++        except OSError as e:
++            code = "DISK_FULL" if e.errno == errno.ENOSPC else "NETWORK"
++            td["status"] = "error"
++            td["error"] = {"code": code, "message": str(e)}
++        except Exception as e:
++            # 探针: 根因未明时保留全栈(设备可 curl 任务详情取)
++            td["status"] = "error"
++            td["error"] = {"code": "NETWORK", "message": repr(e), "stack": traceback.format_exc()[:2000]}
++
++    @staticmethod
++    async def run(session, td):
++        td["status"] = "in_progress"
++        td["updated_at"] = time.time()
++        try:
++            if session is None:
++                raise _OhosDlError("BUSY", "server session not ready")
++            await asyncio.get_event_loop().run_in_executor(None, OHOSModelDownloader._dl_sync, td)
++        except _OhosDlError as e:
++            td["status"] = "error" if e.code != "CANCELLED" else "cancelled"
++            td["error"] = {"code": e.code, "message": e.message}
++            _ohos_dl_cleanup_stale(td["dest_dir"], set(_OHOS_DL_TASKS) | {td["task_id"]})
++        except asyncio.CancelledError:
++            td["status"] = "cancelled"
++            raise
++        except Exception as e:
++            td["status"] = "error"
++            td["error"] = {"code": "NETWORK", "message": repr(e), "stack": traceback.format_exc()[:2000]}
++        finally:
++            td["updated_at"] = time.time()
++
++
+ def create_origin_only_middleware():
+     @web.middleware
+     async def origin_only_middleware(request: web.Request, handler):
+@@ -353,6 +573,129 @@ class PromptServer():
+             files = folder_paths.get_filename_list(folder)
+             return web.json_response(files)
+ 
++        # —— OHOS 模型下载端点(W3; 模块级驱动见 OHOSModelDownloader/_OHOS_DL_*) ——
++        # task_id 用 {[0-9a-f]{16}} 正则约束, 避免吞掉 /catalog 具名路由。
++        @routes.get("/models/download/catalog")
++        async def ohos_download_catalog(request):
++            return web.json_response({"catalog": _ohos_dl_catalog()})
++
++        @routes.post("/models/download")
++        async def ohos_download_start(request):
++            try:
++                body = await request.json()
++            except Exception:
++                return web.json_response(
++                    {"error": {"code": "INVALID_URL", "message": "json body required"}}, status=400)
++            url = body.get("url") or ""
++            directory = body.get("directory") or ""
++            filename = body.get("filename") or ""
++            try:
++                _ohos_dl_validate_url(url)
++            except _OhosDlError as e:
++                return web.json_response({"error": {"code": e.code, "message": e.message}}, status=400)
++            if directory not in folder_paths.folder_names_and_paths:
++                return web.json_response(
++                    {"error": {"code": "INVALID_DIRECTORY", "message": directory}}, status=400)
++            dest_dir = folder_paths.folder_names_and_paths[directory][0][0]
++            try:
++                _ohos_dl_validate_filename(filename, dest_dir)
++            except _OhosDlError as e:
++                return web.json_response({"error": {"code": e.code, "message": e.message}}, status=400)
++            dest = os.path.join(dest_dir, filename)
++            # 2026-09-05 W3 实锤: 中断下载残留 0B 文件 — 存在≠可用;
++            #   0B 视为可覆盖(删后重下, 与 ArkTS ensureModel 的 0B 处理同款)
++            if os.path.exists(dest) and os.path.getsize(dest) > 0:
++                return web.json_response(
++                    {"error": {"code": "ALREADY_EXISTS", "message": filename}}, status=409)
++            if os.path.exists(dest):
++                try:
++                    os.remove(dest)
++                except OSError:
++                    pass
++            async with _OHOS_DL_LOCK:
++                for td in _OHOS_DL_TASKS.values():
++                    if (td["url"], td["directory"], td["filename"]) == (url, directory, filename) \
++                            and td["status"] in ("pending", "in_progress", "paused"):
++                        return web.json_response(
++                            {"task_id": td["task_id"], "status": td["status"]}, status=202)
++                td = OHOSModelDownloader.new_task(url, directory, filename, body.get("sha256"))
++                _OHOS_DL_TASKS[td["task_id"]] = td
++                _ohos_dl_trim()
++            asyncio.create_task(OHOSModelDownloader.run(self.client_session, td))
++            return web.json_response({"task_id": td["task_id"], "status": td["status"]}, status=202)
++
++        @routes.get("/models/download")
++        async def ohos_download_list(request):
++            return web.json_response({
++                "tasks": [OHOSModelDownloader.task_view(t) for t in _OHOS_DL_TASKS.values()]})
++
++        async def _ohos_get_task_or_error(request, task_id):
++            td = _OHOS_DL_TASKS.get(task_id)
++            if td is None:
++                return None, web.json_response(
++                    {"error": {"code": "NOT_FOUND", "message": task_id}}, status=404)
++            return td, None
++
++        @routes.get("/models/download/{task_id:[0-9a-f]{16}}")
++        async def ohos_download_get(request):
++            task_id = request.match_info["task_id"]
++            td, err = await _ohos_get_task_or_error(request, task_id)
++            if err is not None:
++                return err
++            return web.json_response(OHOSModelDownloader.task_view(td))
++
++        @routes.post("/models/download/{task_id:[0-9a-f]{16}}/pause")
++        async def ohos_download_pause(request):
++            task_id = request.match_info["task_id"]
++            td, err = await _ohos_get_task_or_error(request, task_id)
++            if err is not None:
++                return err
++            if td["status"] not in ("in_progress", "pending"):
++                return web.json_response(
++                    {"error": {"code": "NOT_FOUND", "message": f"cannot pause {td['status']}"}},
++                    status=409)
++            td["status"] = "paused"
++            return web.json_response({"status": "paused"}, status=202)
++
++        @routes.post("/models/download/{task_id:[0-9a-f]{16}}/resume")
++        async def ohos_download_resume(request):
++            task_id = request.match_info["task_id"]
++            td, err = await _ohos_get_task_or_error(request, task_id)
++            if err is not None:
++                return err
++            if td["status"] != "paused":
++                return web.json_response(
++                    {"error": {"code": "NOT_FOUND", "message": f"cannot resume {td['status']}"}},
++                    status=409)
++            td["status"] = "in_progress"  # 从头重拉(part 保留, 下一迭代重新覆盖)
++            return web.json_response({"status": "in_progress"}, status=202)
++
++        @routes.post("/models/download/{task_id:[0-9a-f]{16}}/cancel")
++        async def ohos_download_cancel(request):
++            task_id = request.match_info["task_id"]
++            td, err = await _ohos_get_task_or_error(request, task_id)
++            if err is not None:
++                return err
++            if td["status"] == "completed":
++                return web.json_response(
++                    {"error": {"code": "NOT_FOUND", "message": "completed cannot cancel"}}, status=409)
++            td["status"] = "cancelled"
++            return web.json_response({"status": "cancelled"}, status=202)
++
++        @routes.delete("/models/download/{task_id:[0-9a-f]{16}}")
++        async def ohos_download_delete(request):
++            task_id = request.match_info["task_id"]
++            td, err = await _ohos_get_task_or_error(request, task_id)
++            if err is not None:
++                return err
++            if td["status"] in ("pending", "in_progress", "paused"):
++                return web.json_response(
++                    {"error": {"code": "NOT_FOUND", "message": "in-progress cannot be removed"}},
++                    status=409)
++            async with _OHOS_DL_LOCK:
++                _OHOS_DL_TASKS.pop(task_id, None)
++            return web.json_response({"deleted": task_id}, status=200)
++
+         @routes.get("/extensions")
+         async def get_extensions(request):
+             files = glob.glob(os.path.join(
+@@ -1264,6 +1607,12 @@ class PromptServer():
+                 self.app.add_routes([
+                     web.static('/templates', workflow_templates_path)
+                 ])
++            else:
++                # OHOS_TEMPLATES_DEFAULT_DIR v1 — 设备无 comfyui-workflow-templates 包,
++                # 模板源退到 comfyui 根 templates/(自备轻量模板, docs/frontend-fork-plan.md)。
++                _builtin_tpl = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
++                if os.path.isdir(_builtin_tpl):
++                    self.app.add_routes([web.static('/templates', _builtin_tpl)])
+         else:
+             handler = FrontendManager.template_asset_handler()
+             if handler:
 diff --git a/templates/index.json b/templates/index.json
 new file mode 100644
-index 0000000..aff0e4f
+index 0000000..614f1d1
 --- /dev/null
 +++ b/templates/index.json
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,65 @@
 +[
 +  {
 +    "moduleName": "default",
@@ -47,11 +427,454 @@ index 0000000..aff0e4f
 +        "size": 0,
 +        "sourceModule": "default",
 +        "usage": 0
++      },
++      {
++        "name": "sd_turbo_img2img_256",
++        "title": "SD-Turbo \u56fe\u751f\u56fe 256",
++        "description": "256\u00d7256 \u56fe\u751f\u56fe, 2 \u6b65, \u4f4e\u5185\u5b58\u8bbe\u5907; \u9700\u5728\u8f93\u5165\u7aef\u52a0\u8f7d\u4e00\u5f20\u56fe\u7247",
++        "mediaType": "image",
++        "mediaSubtype": "webp",
++        "tags": [
++          "Image to Image"
++        ],
++        "models": [
++          "sd_turbo.safetensors"
++        ],
++        "date": "2026-09-05",
++        "openSource": true,
++        "size": 0,
++        "sourceModule": "default",
++        "usage": 0
 +      }
 +    ]
 +  }
 +]
 \ No newline at end of file
+diff --git a/templates/sd_turbo_img2img_256.json b/templates/sd_turbo_img2img_256.json
+new file mode 100644
+index 0000000..5c1637e
+--- /dev/null
++++ b/templates/sd_turbo_img2img_256.json
+@@ -0,0 +1,419 @@
++{
++  "last_node_id": 8,
++  "last_link_id": 11,
++  "nodes": [
++    {
++      "id": 1,
++      "type": "CheckpointLoaderSimple",
++      "pos": [
++        48,
++        300
++      ],
++      "size": [
++        315,
++        98
++      ],
++      "flags": {},
++      "order": 0,
++      "mode": 0,
++      "inputs": [],
++      "outputs": [
++        {
++          "name": "MODEL",
++          "type": "MODEL",
++          "links": [
++            1
++          ],
++          "slot_index": 0
++        },
++        {
++          "name": "CLIP",
++          "type": "CLIP",
++          "links": [
++            2,
++            3
++          ],
++          "slot_index": 1
++        },
++        {
++          "name": "VAE",
++          "type": "VAE",
++          "links": [
++            7
++          ],
++          "slot_index": 2
++        }
++      ],
++      "properties": {
++        "Node name for S&R": "CheckpointLoaderSimple"
++      },
++      "widgets_values": [
++        "sd_turbo.safetensors"
++      ]
++    },
++    {
++      "id": 2,
++      "type": "CLIPTextEncode",
++      "pos": [
++        420,
++        110
++      ],
++      "size": [
++        330,
++        194
++      ],
++      "flags": {},
++      "order": 2,
++      "mode": 0,
++      "inputs": [
++        {
++          "name": "clip",
++          "type": "CLIP",
++          "link": 2
++        }
++      ],
++      "outputs": [
++        {
++          "name": "CONDITIONING",
++          "type": "CONDITIONING",
++          "links": [
++            5
++          ],
++          "slot_index": 0
++        }
++      ],
++      "properties": {
++        "Node name for S&R": "CLIPTextEncode"
++      },
++      "widgets_values": [
++        "stylized oil painting, vibrant colors, highly detailed"
++      ]
++    },
++    {
++      "id": 3,
++      "type": "CLIPTextEncode",
++      "pos": [
++        420,
++        350
++      ],
++      "size": [
++        330,
++        194
++      ],
++      "flags": {},
++      "order": 3,
++      "mode": 0,
++      "inputs": [
++        {
++          "name": "clip",
++          "type": "CLIP",
++          "link": 3
++        }
++      ],
++      "outputs": [
++        {
++          "name": "CONDITIONING",
++          "type": "CONDITIONING",
++          "links": [
++            6
++          ],
++          "slot_index": 0
++        }
++      ],
++      "properties": {
++        "Node name for S&R": "CLIPTextEncode"
++      },
++      "widgets_values": [
++        "blurry, low quality, watermark"
++      ]
++    },
++    {
++      "id": 4,
++      "type": "LoadImage",
++      "pos": [
++        420,
++        590
++      ],
++      "size": [
++        315,
++        314
++      ],
++      "flags": {},
++      "order": 1,
++      "mode": 0,
++      "inputs": [],
++      "outputs": [
++        {
++          "name": "IMAGE",
++          "type": "IMAGE",
++          "links": [
++            8
++          ],
++          "slot_index": 0
++        }
++      ],
++      "properties": {
++        "Node name for S&R": "LoadImage"
++      },
++      "widgets_values": [
++        "example.png"
++      ]
++    },
++    {
++      "id": 5,
++      "type": "VAEEncode",
++      "pos": [
++        780,
++        590
++      ],
++      "size": [
++        210,
++        46
++      ],
++      "flags": {},
++      "order": 4,
++      "mode": 0,
++      "inputs": [
++        {
++          "name": "pixels",
++          "type": "IMAGE",
++          "link": 8
++        },
++        {
++          "name": "vae",
++          "type": "VAE",
++          "link": 7
++        }
++      ],
++      "outputs": [
++        {
++          "name": "LATENT",
++          "type": "LATENT",
++          "links": [
++            9
++          ],
++          "slot_index": 0
++        }
++      ],
++      "properties": {
++        "Node name for S&R": "VAEEncode"
++      },
++      "widgets_values": []
++    },
++    {
++      "id": 6,
++      "type": "KSampler",
++      "pos": [
++        780,
++        100
++      ],
++      "size": [
++        315,
++        262
++      ],
++      "flags": {},
++      "order": 5,
++      "mode": 0,
++      "inputs": [
++        {
++          "name": "model",
++          "type": "MODEL",
++          "link": 1
++        },
++        {
++          "name": "positive",
++          "type": "CONDITIONING",
++          "link": 5
++        },
++        {
++          "name": "negative",
++          "type": "CONDITIONING",
++          "link": 6
++        },
++        {
++          "name": "latent_image",
++          "type": "LATENT",
++          "link": 9
++        }
++      ],
++      "outputs": [
++        {
++          "name": "LATENT",
++          "type": "LATENT",
++          "links": [
++            10
++          ],
++          "slot_index": 0
++        }
++      ],
++      "properties": {
++        "Node name for S&R": "KSampler"
++      },
++      "widgets_values": [
++        42,
++        "randomize",
++        2,
++        1.0,
++        "euler",
++        "normal",
++        0.75
++      ]
++    },
++    {
++      "id": 7,
++      "type": "VAEDecode",
++      "pos": [
++        1140,
++        190
++      ],
++      "size": [
++        210,
++        46
++      ],
++      "flags": {},
++      "order": 6,
++      "mode": 0,
++      "inputs": [
++        {
++          "name": "samples",
++          "type": "LATENT",
++          "link": 10
++        },
++        {
++          "name": "vae",
++          "type": "VAE",
++          "link": 7
++        }
++      ],
++      "outputs": [
++        {
++          "name": "IMAGE",
++          "type": "IMAGE",
++          "links": [
++            11
++          ],
++          "slot_index": 0
++        }
++      ],
++      "properties": {
++        "Node name for S&R": "VAEDecode"
++      },
++      "widgets_values": []
++    },
++    {
++      "id": 8,
++      "type": "SaveImage",
++      "pos": [
++        1400,
++        150
++      ],
++      "size": [
++        315,
++        260
++      ],
++      "flags": {},
++      "order": 7,
++      "mode": 0,
++      "inputs": [
++        {
++          "name": "images",
++          "type": "IMAGE",
++          "link": 11
++        }
++      ],
++      "outputs": [],
++      "properties": {
++        "Node name for S&R": "SaveImage"
++      },
++      "widgets_values": [
++        "sd_turbo_img2img_256"
++      ]
++    }
++  ],
++  "links": [
++    [
++      1,
++      1,
++      0,
++      6,
++      0,
++      "MODEL"
++    ],
++    [
++      2,
++      1,
++      1,
++      2,
++      0,
++      "CLIP"
++    ],
++    [
++      3,
++      1,
++      1,
++      3,
++      0,
++      "CLIP"
++    ],
++    [
++      5,
++      2,
++      0,
++      6,
++      1,
++      "CONDITIONING"
++    ],
++    [
++      6,
++      3,
++      0,
++      6,
++      2,
++      "CONDITIONING"
++    ],
++    [
++      7,
++      1,
++      2,
++      5,
++      1,
++      "VAE"
++    ],
++    [
++      8,
++      4,
++      0,
++      5,
++      0,
++      "IMAGE"
++    ],
++    [
++      9,
++      5,
++      0,
++      6,
++      3,
++      "LATENT"
++    ],
++    [
++      10,
++      6,
++      0,
++      7,
++      0,
++      "LATENT"
++    ],
++    [
++      11,
++      7,
++      0,
++      8,
++      0,
++      "IMAGE"
++    ]
++  ],
++  "groups": [],
++  "config": {},
++  "extra": {},
++  "version": 0.4
++}
 diff --git a/templates/sd_turbo_text2image_256.json b/templates/sd_turbo_text2image_256.json
 new file mode 100644
 index 0000000..a2448cf
