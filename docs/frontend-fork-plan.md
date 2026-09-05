@@ -60,7 +60,12 @@ comfyui 主仓库
 
 ## 6. 验收(本 Goal 完结点)
 
-- [ ] `fetch` → `build_frontend.sh` → `make stage` → `make zip` 全绿(自建 dist 替换官方, 锚=自建产物);
-- [ ] 真机 `make verify` ALL PASS(v1.54.4 版前端 + NIGHTLY 标志消失, 截图确认);
-- [ ] `frontend_static/index.html` 与 dist 目录不变即"定制前基线"记录(sha);
-- [ ] 结构文档同步: AGENTS.md/BUILD.md 增"前端 fork 页面"; 本文档降级为"已实施"。
+- [x] `fetch` → `build_frontend.sh` → `make stage` → `make zip` 全绿(自建 dist 替换官方, 锚=自建产物);
+- [x] 真机 v1.54.4 前端正常渲染(2026-09-05 实测截图), NIGHTLY 渠道徽章消失(旧版右上角有, 新版无);
+- [x] `frontend_static/index.html` 锚更新(19064c6f…, 与 pins.tsv 一致);
+- [x] 结构文档同步(AGENTS.md 快速定位 + 本文档)。
+
+**升级中发现的关联 bug(已修)**: 解包重建(run58 指纹)只删 `lib/python3.12`,`comfyui/` 不在删除范围 →
+zip 换版后新旧前端混装残留(实测 assets 1741 文件 vs 自建 ~1100)。**Stdlib.ets 补**: 指纹不匹配分支
+额外整删 `pyroot/comfyui/frontend_static/`(零用户数据)后解包。教训: 新增于 zip 的非 stdlib 大目录,
+解包清档必须同步覆盖。

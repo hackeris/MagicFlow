@@ -103,6 +103,13 @@ async function doEnsure(ctx: Context): Promise<string> {
         `${home}/lib/python3.12`);
       fileIo.rmdirSync(`${home}/lib/python3.12`);
     }
+    // 2026-09-05 F 口修复: comfyui/frontend_static/ 不在 lib 删除范围内 —— 而 zip 换版会
+    //   留下旧 hash 文件(新旧前端混装, 实测 assets 1741 文件 vs 自建 ~1100)。
+    //   frontend_static 无用户数据(模型在 comfyui/models, 不在此目录), 整目录删后由解包重建。
+    if (fileIo.accessSync(`${home}/comfyui/frontend_static`)) {
+      hilog.info(DOMAIN, TAG, 'frontend_static stale removed -> %{public}s', `${home}/comfyui/frontend_static`);
+      fileIo.rmdirSync(`${home}/comfyui/frontend_static`);
+    }
     await zlib.decompressFile(dest, home, {});
 
     if (!fileIo.accessSync(marker)) {
