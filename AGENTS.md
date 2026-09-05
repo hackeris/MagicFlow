@@ -51,6 +51,7 @@ make log clean clean-all
 ## 6. 快速定位
 
 - 主链：`entry/src/main/cpp/child/comfy_child.cpp` 的 `Main`（PyConfig / meta_path finder / run_path）；
+- 环境门/门户：`entry/src/main/ets/pages/Index.ets`（W1 壳层门户, 官方 Chooser 同构; 零自动启动, 手势才 launch）;
 - zip 组装与三锚：`scripts/make_py312_zip.py`；stage 组装与校验：`scripts/make_comfyui_stage.py`；
 - 模型层 stub 白名单：`stub/stub_global.py` 的 `STUB_SECT`（两份 stub 模板同步改）；
 - 库收集机制：`CMakeLists.txt::import_ext_so` 注释块（2026-09-03 定谳）。

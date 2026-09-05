@@ -1,6 +1,8 @@
 # workspace 门设计(产品化体验对齐)
 
-> 2026-09-05 设计稿(未实施)。目标:把「App 打开即起后端+自动加载画布」的 POC 行为,收敛为官方新版一致的门控体验——**用户创建/打开工作空间后,后端与内容才出现**。
+> 2026-09-05 设计稿;**W1 已实施(2026-09-05 同日真机验证闭环)**。目标:把「App 打开即起后端+自动加载画布」的 POC 行为,收敛为官方一致的门控体验——**用户创建/打开环境后,后端与内容才出现**。
+>
+> **⚠ 2026-09-05 调研定谳(修正前提, 见 §7)**:官方 "Team Workspaces" 是**云账户/计费作用域**(cloud.comfy.org + Firebase 登录),本地开源后端无任何 workspace 端点(v0.34 server.py 全检 0 命中);官方桌面首屏门户 = **Electron 壳自绘的 Chooser(环境瓦片)**,webview 内前端无 Node 运行时、无法自起后端,壳也不监听前端 workspace 事件。**结论:门户=壳层 UI(与官方 Chooser 同构)是唯一正确形态;原 W2「前端升级出 Web 门户」的前提被推翻,W2 取消。**
 
 ## 1. 背景与差距
 
@@ -41,11 +43,11 @@
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| **W1 门户 UI + 延迟启动(不动前端 pin)** | Index.ets 改造(onAppear 去 launch/ensureModel; 门户页; 选择→launch; 显示"后端就绪"状态) | 打开 App:门户出现、**后端进程未起**(ps 验证);创建空间→起后端→8188→画布就绪;`make verify`(COMFY_SMOKE=1)仍 PASS |
-| **W2 前端 pin 升级(workspace 化)** | comfyui-src + frontend-dist pin 更新;重跑 `make verify` + 手工空间流程 | workspace 门户在 Web 层原生呈现(本地前端与 app 门户二选一或融合, 见 W2 决策) |
-| **W3 模型/规格选择进入空间体验** | startComfyChild 传规格(256/512 界限由 built-in 提示);ensureModel 延迟到新建空间动作 | 创建空间才触发模型检测/下载 |
+| **W1 门户 UI + 延迟启动(不动前端 pin)** ✅(2026-09-05 已实施) | Index.ets 改造:门户视图(标题/新建环境按钮/我的环境列表/新建对话框);onAppear 仅 loadWsList(零自动);launch/ensureModel 链移入「创建/打开环境」动作 | 打开 App:门户出现、**后端进程未起**(ps 验证 ✅);打开/新建环境→起后端→8188 就绪→画布(✅ 60s);`make verify` 经门户驱导(uitest)仍 PASS(待归档);回退=go Index.ets 保留段还原 |
+| **W2 前端 pin 升级(workspace 化)** ❌ **取消** | 调研推翻前提:官方 Web 前端无本地 workspace 门户(云/壳所属);前端保持 pin 1.54.1(与后端 0.34.0 官方同期配套) | —(详见 §7) |
+| **W3 模型/规格选择进入环境体验**(未实施) | startComfyChild 传规格;ensureModel 已随 W1 延迟到新建环境动作(建→拉取);规格选择 UI 待做 | 创建环境才触发模型检测/下载(状态:ensureModel 已随动,规格选项暂以内置文案 256 提示) |
 
-**W1/W2 解耦可独立**:W1 用现有 1.54 前端(门户在 ArkTS 层),W2 再升级。
+**W1 实测要点(2026-09-05)**:结构=Index.ets 单文件双视图(else=门户/if active=Web),数据=filesDir/workspaces.json;[平台教训] UIAbility.onCreate 访问 want.parameters 即毒化启动(白屏死锁无日志)→ **外部信号一律走 UI 手势/文件,绝不进 onCreate**;verify 门户驱导=uitest(设备无 input 命令)+ dumpLayout 动态定位(文本/hint 节点中心),每次注入前 aa start 拉回前台(防误触)。
 
 ## 4. 风险与回归清单(升级前端时)
 
@@ -68,3 +70,16 @@
 
 - W1:Index.ets git 还原即可;W2:pin 表还原 + `make fetch` 重拉(锚校验);
 - 后端 API 从未变,风险集中在 UI/WEB 层。
+
+## 7. 调研定谳(2026-09-05, 双人并行源码级调研)
+
+| 问题 | 结论 | 证据 |
+|---|---|---|
+| 官方 workspace 门户 = Web 前端? | 否。Web 前端自托管形态首屏=`/` 画布;workspace 门户是(a) Comfy Cloud 云构建(isCloud,需 Firebase+计费)或(b) Desktop 壳的 Chooser | ComfyUI_frontend src/router.ts;ChooserView.vue |
+| workspace 后端端点? | 本地开源后端无任何 workspace 概念(v0.34 server.py 全文 0 命中,无 /workspaces);前端 workspace API 全部指向 cloud.comfy.org | v0.34.0/server.py;workspaceApiUrl.ts |
+| Desktop 门户怎么起后端? | Electron 主进程 spawn(chooser 点击→IPC launch→spawnComfy);webview 无 Node 运行时起不了进程;壳不监听前端 workspace 事件 | Comfy-Desktop src/main/lib/ipc/sessionActions/launch.ts、attach.ts |
+| 官方术语 | "ComfyUI 环境(Environment)/New Install",非 workspace(后者=云账户作用域) | ChooserFamilyGrid.vue "New Install tile" |
+| 升级组合 | 前端 1.54.1 + 后端 0.34.0 = 官方同期配套,无需升级 | docs.comfy.org/zh/changelog 版本-前端对照 |
+| 可拦截信号(若走 Web 门户路线) | 官方无生命周期钩子;唯一确定性拦截点=Storage.setItem 的 Comfy.Workspace.*(sessionStorage/localStorage) | workspaceConstants.ts/workspaceAuthStore.ts(persist 写点) |
+
+**对本项目的改变**:W2 取消;门户=ArkTS 壳(官方同构);"打开环境才起后端"= Chooser 点击→launch 的 ArkTS 对应物。W3 顺延(模型/规格配置未来进入环境体验)。

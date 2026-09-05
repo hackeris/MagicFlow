@@ -44,13 +44,22 @@ comfyui-src patch:custom_nodes/ohos_smoke/  (独立自检节点)
 
 ## 3. 验收(改造完成后)
 
-- [ ] `make verify` 5 判据全 PASS(与现状等价);
-- [ ] 产品断言:`grep -rn "COMFTEST\|OHOS_SmokeBench" entry/src/main/cpp/` = 0;
-- [ ] Release/Debug 构建产物都不含 smoke 符号(`strings libcomfy_child.so | grep COMFTEST` = 空);
-- [ ] 出图基准不变(字节级 smoke_workflow_256x2,与基线比对 10KB 以上);
-- [ ] 双区镜像 + BUILD.md §4 环节速查补一行(smoke 节点)。
+- [x] `make verify` 5 判据全 PASS(2026-09-05 首轮 ALL PASS 归档 commit 7f1c846;W1 门户化后的归档待最终一轮);
+- [x] 产品断言:`grep -rn "COMFTEST\|OHOS_SmokeBench" entry/src/main/cpp/` = 0;
+- [x] Release/Debug 构建产物都不含 smoke 符号(`strings libcomfy_child.so | grep COMFTEST` = 空);
+- [x] 出图基准:2026-09-05 起判据 C 改**随机 seed**(见下),不再字节比对;
+- [x] 单库化(无双区, push_sources 已删)。
+
+**2026-09-05 后续变更(两项)**:
+1. **随机 seed**:判据 C 提交前把 workflow 内所有 `seed` 注入随机值(verify_smoke.sh [判据 C 段])。
+   理由(用户反馈):每次出图必须可见差异(避免"假生成"观感);且固定 seed 命中 ComfyUI 执行缓存 →
+   二次出图 T=0.0s"假 success"。副作用:每轮真执行,**判据 C 须在干净设备态跑**(swap 拥挤时 231-368s;
+   干净态 91-119s;超时属环境,非回归)。
+2. **门户驱导([1b] 段)**:W1 环境门(workspace-design.md)后,后端由用户手势触发 → verify 以 UI 自动化
+   执行同一手势。设备无 `input` 命令 → **uitest**(`uiInput click/text/keyEvent`);坐标由 `uitest dumpLayout`
+   动态取文本/hint 节点中心(不硬编码);每次注入前 `aa start` 拉回前台(防误触用户正用的应用)。
 
 ## 4. 关联文档
 
-- `docs/workspace-design.md` §2:验证模式(COMFY_SMOKE=1)在 UI 层接入本 smoke 判据;
+- `docs/workspace-design.md` §3(W1 已实施/门户驱导);
 - `docs/BUILD.md` §3:smoke 一节(已有)更新为上述黑盒判定。

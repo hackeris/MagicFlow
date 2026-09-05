@@ -79,14 +79,91 @@ const BACKEND_URL = 'http://127.0.0.1:8188';
 const POLL_MS = 2500;
 const POLL_MAX_MS = 240000;
 
+// ── W1 ComfyUI 环境门(2026-09-05, docs/workspace-design.md)───────────────────
+//   官方同构: 门户 = 壳层 UI(对标 Comfy-Desktop 的 Chooser 环境瓦片选择器, shell 搭建;
+//   官方术语: "ComfyUI 环境(Environment)", 非 workspace —— 后者为云账户作用域(调研实证))。
+//   用户创建/打开环境后才 launch()。
+//   回退: 删本段改动并把 onAppear 恢复为 launc+waitBackend+ensureModel 即还原 POC。
+//   ⚠ 2026-09-05 实测教训: UIAbility.onCreate 任何 want.parameters 访问即毒化启动
+//   (白屏死锁, 无日志); 故本页所有数据源均为 filesDir 文件 + 用户手势, 绝不读 want。
+interface Workspace {
+  id: string;
+  name: string;
+  createdAt: number;
+  lastOpened: number;
+}
+const WS_FILE = 'workspaces.json';
+
 @Entry
 @Component
 struct Index {
   @State pid: number = 0;
   @State backendReady: boolean = false;
   @State status: string = '正在拉起后端子进程…';
+  @State active: boolean = false;        // 已进入工作空间(Web 视图)
+  @State wsList: Workspace[] = [];
+  @State creating: boolean = false;      // 新建对话框开关
+  @State wsName: string = '';
   controller: webview.WebviewController = new webview.WebviewController();
   pollTimer: number = -1;
+
+  // ── W1:workspace 数据(filesDir/workspaces.json)──────────────────────────────
+  wsPath(ctx: string): string {
+    return `${ctx}/${WS_FILE}`;
+  }
+
+  loadWsList(): void {
+    try {
+      const t = fileIo.readTextSync(this.wsPath(getContext(this).filesDir));
+      this.wsList = JSON.parse(t) as Workspace[];
+    } catch (_) { this.wsList = []; }
+  }
+
+  saveWsList(): void {
+    try {
+      const fp = this.wsPath(getContext(this).filesDir);
+      const fd = fileIo.openSync(fp,
+        fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC | fileIo.OpenMode.WRITE_ONLY);
+      fileIo.writeSync(fd.fd, JSON.stringify(this.wsList));
+      fileIo.closeSync(fd);
+    } catch (e) { hilog.error(DOMAIN, TAG, 'saveWsList fail: %{public}s', JSON.stringify(e)); }
+  }
+
+  startWorkspace(nm: string): void {
+    // W1: 用户动作(新建/打开)才触发 —— 原 POC 的 launch+waitBackend+ensureModel 链
+    this.active = true;
+    this.creating = false;
+    this.status = '正在拉起后端子进程…';
+    void this.launch(getContext(this));
+    this.waitBackend();
+    void ensureModel(getContext(this)).then((ok) => {
+      if (ok) {
+        hilog.info(DOMAIN, TAG, 'model in place, refresh UI');
+        setTimeout(() => {
+          try { this.controller.refresh(); } catch (_) { /* ignore */ }
+        }, 1500);
+      }
+    });
+    hilog.info(DOMAIN, TAG, 'workspace entered: %{public}s', nm);
+  }
+
+  createWorkspace(): void {
+    const nm = this.wsName.trim();
+    if (nm.length === 0) { return; }
+    this.wsList.push({
+      id: String(Date.now()), name: nm,
+      createdAt: Date.now(), lastOpened: Date.now()
+    });
+    this.saveWsList();
+    this.wsName = '';
+    this.startWorkspace(nm);
+  }
+
+  openWorkspace(w: Workspace): void {
+    w.lastOpened = Date.now();
+    this.saveWsList();
+    this.startWorkspace(w.name);
+  }
 
   // 子进程(NCP)是独立进程：把 pyroot=<filesDir>/pyroot 塞进 entryParams，子进程据此设 PYTHONHOME/PYTHONPATH。
   // stdlib 的拷贝+解压统一由 Stdlib.ets 单例负责（EntryAbility.onCreate 唯一触发点）；
@@ -152,54 +229,121 @@ struct Index {
   }
 
   build() {
-    // 全屏铺满（无标题/无边距）：Web 常驻撑满整个窗口（含状态栏/导航栏 safe area），
-    //   后端就绪前仅底部悬浮一行状态小字（调试可读,不占布局）。
+    // 全屏铺满（无标题/无边距）。W1 门控: 未进入工作空间 → 门户(零自动);
+    //   已进入 → Web 常驻撑满窗口, 后端就绪前底部悬浮状态小字。
     Stack() {
-      // src 恒为 about:blank：加载源唯一 —— 后端就绪由 waitBackend() 的 controller.loadUrl(BACKEND_URL)
-      //   触发（2019-09-04 全屏改版：src 随 backendReady 切换会与 loadUrl 双触发重复加载）。
-      Web({ src: 'about:blank', controller: this.controller })
-        .javaScriptAccess(true)
-        .domStorageAccess(true)
-        .fileAccess(true)
-        .onPageBegin((event) => {
-          hilog.info(DOMAIN, TAG, 'Web page begin: %{public}s', event.url);
-        })
-        .onPageEnd((event) => {
-          hilog.info(DOMAIN, TAG, 'Web page end: %{public}s', event.url);
-        })
-        .onErrorReceive((event) => {
-          hilog.error(DOMAIN, TAG, 'Web error: url=%{public}s err=%{public}s',
-            event.request.getRequestUrl(), JSON.stringify(event.error));
-        })
+      if (this.active) {
+        // src 恒为 about:blank：加载源唯一 —— 后端就绪由 waitBackend() 的 controller.loadUrl(BACKEND_URL)
+        //   触发（2019-09-04 全屏改版：src 随 backendReady 切换会与 loadUrl 双触发重复加载）。
+        Web({ src: 'about:blank', controller: this.controller })
+          .javaScriptAccess(true)
+          .domStorageAccess(true)
+          .fileAccess(true)
+          .onPageBegin((event) => {
+            hilog.info(DOMAIN, TAG, 'Web page begin: %{public}s', event.url);
+          })
+          .onPageEnd((event) => {
+            hilog.info(DOMAIN, TAG, 'Web page end: %{public}s', event.url);
+          })
+          .onErrorReceive((event) => {
+            hilog.error(DOMAIN, TAG, 'Web error: url=%{public}s err=%{public}s',
+              event.request.getRequestUrl(), JSON.stringify(event.error));
+          })
+          .width('100%')
+          .height('100%')
+        if (!this.backendReady) {
+          Text(this.status)
+            .fontSize(12)
+            .fontColor(0xCCCCCC)
+            .backgroundColor(0x66000000)
+            .borderRadius(8)
+            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+            .position({ x: '40%', y: '94%' })  // 底部居中悬浮,不遮挡 Web 操作区
+        }
+      } else {
+        // ── 门户视图(W1, 官方 Chooser 同构): 用户创建/打开工作空间后才启动后端 ──
+        Column() {
+          Text('ComfyUI on HarmonyOS')
+            .fontSize(30)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(0x123b6d)
+            .margin({ top: 60, bottom: 8 })
+          Text('创建或打开 ComfyUI 环境后, 后端才会启动')
+            .fontSize(14)
+            .fontColor(0x888888)
+            .margin({ bottom: 36 })
+
+          Button('新建环境')
+            .width('70%')
+            .height(48)
+            .fontSize(16)
+            .onClick(() => { this.creating = true; })
+
+          if (this.creating) {
+            Column() {
+              TextInput({ placeholder: '环境名称' })
+                .height(44)
+                .margin({ top: 20 })
+                .onChange((v: string) => { this.wsName = v; })
+                .onSubmit(() => { this.createWorkspace(); })  // 键盘 Enter 提交(verif 自动化经 keyevent 66)
+              Text('规格: 默认 256×256 输出 (512 受设备内存限制不可用)')
+                .fontSize(12)
+                .fontColor(0x999999)
+                .margin({ top: 8 })
+              Row() {
+                Button('创建')
+                  .enabled(this.wsName.trim().length > 0)
+                  .onClick(() => { this.createWorkspace(); })
+                Button('取消')
+                  .margin({ left: 16 })
+                  .onClick(() => { this.creating = false; this.wsName = ''; })
+              }.margin({ top: 16 })
+            }.width('70%').alignItems(HorizontalAlign.Start)
+          }
+
+          if (this.wsList.length > 0) {
+            Text('我的环境')
+              .fontSize(14)
+              .fontColor(0x666666)
+              .margin({ top: 32, bottom: 8 })
+            Column() {
+              ForEach(this.wsList, (w: Workspace) => {
+                Column() {
+                  Text(w.name).fontSize(16).fontWeight(FontWeight.Medium)
+                  Text(this.fmtTs(w.lastOpened)).fontSize(12).fontColor(0x999999)
+                }
+                .width('100%')
+                .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+                .borderRadius(8)
+                .backgroundColor(0xF2F6FB)
+                .margin({ bottom: 8 })
+                .onClick(() => { this.openWorkspace(w); })
+              }, (w: Workspace) => w.id)
+            }.width('70%')
+          } else if (!this.creating) {
+            Text('还没有环境, 先新建一个')
+              .fontSize(14)
+              .fontColor(0xAAAAAA)
+              .margin({ top: 32 })
+          }
+        }
         .width('100%')
         .height('100%')
-      if (!this.backendReady) {
-        Text(this.status)
-          .fontSize(12)
-          .fontColor(0xCCCCCC)
-          .backgroundColor(0x66000000)
-          .borderRadius(8)
-          .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-          .position({ x: '40%', y: '94%' })  // 底部居中悬浮,不遮挡 Web 操作区
+        .alignItems(HorizontalAlign.Center)
       }
     }
     .width('100%')
     .height('100%')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .onAppear(() => {
-      // 自动化验证：启动即拉起 NCP 子进程（entryParams 供 Main 打印）+ 轮询后端
-      this.launch(getContext(this));
-      this.waitBackend();
-      // 本地推理验证(2026-09-04): 模型在位检测/自动拉取(经 hdc rport 隧道→宿主模型服务器),
-      //   onAppear 即触发(与后端就绪并行), 完成后刷新 ComfyUI。
-      void ensureModel(getContext(this)).then((ok) => {
-        if (ok) {
-          hilog.info(DOMAIN, TAG, 'model in place, refresh UI');
-          setTimeout(() => {
-            try { this.controller.refresh(); } catch (_) { /* ignore */ }
-          }, 1500);
-        }
-      });
+      // W1 门户化: 零自动启动 —— 只读列表; 子进程由 create/open 动作触发。
+      this.loadWsList();
     })
+  }
+
+  fmtTs(t: number): string {
+    const d = new Date(t);
+    const p = (n: number): string => (n < 10 ? `0${n}` : `${n}`);
+    return `${p(d.getHours())}:${p(d.getMinutes())}`;
   }
 }

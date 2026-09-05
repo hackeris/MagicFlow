@@ -8,10 +8,10 @@
 # 判据(固定):
 #   A/B. smoke bench 节点: blas_ok=True 且 mm4x < 2.0s     —— BLAS 后端+多线程 GEMM
 #   C.   出图 smoke_workflow_256x2.json: status=success 且 execution < 180s
-#     (seed=42 确定性; 因模型 fp16/fp32 切换整体变, 不做硬字节断言: 仅 >10KB 且非零;
-#      需要字节级断言时用 --strict + 基线文件 SMOKE_IMAGE_BASELINE)
-# 用法: bash scripts/verify_smoke.sh [--fast] [--device 192.168.1.8:33363] [--hap <path>] [--strict]
-#   --fast   只验后端+A/B(不跑出图); --device 默认 192.168.1.8:33363;
+#     (seed 每轮随机注入(2026-09-05) → 每轮真执行、图像各异, 无缓存假成功;
+#      判据只验 success+耗时+>10KB, 不做字节断言)
+# 用法: bash scripts/verify_smoke.sh [--fast] [--device 192.168.1.8:33363] [--hap <path>]
+#   --fast   只验后端+判据 A/B(不跑出图); --device 默认 192.168.1.8:33363;
 #   --hap 默认 entry/build/default/outputs/default/entry-default-signed.hap
 # 输出: PASS/FAIL 逐项 + 关键数字; 任一 FAIL → exit 1。全量约 4-5 分钟。
 set -euo pipefail
@@ -19,11 +19,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEVICE="192.168.1.8:33363"
 HAP="$ROOT/entry/build/default/outputs/default/entry-default-signed.hap"
-FAST=0; STRICT=0
+FAST=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --fast) FAST=1 ;;
-    --strict) STRICT=1 ;;
     --device) DEVICE="$2"; shift ;;
     --hap) HAP="$2"; shift ;;
     *) echo "未知参数 $1"; exit 2 ;;
@@ -32,7 +31,6 @@ while [ $# -gt 0 ]; do
 done
 HDC="hdc -t $DEVICE"
 DLOG=/data/app/el2/100/base/app.hackeris.hium/haps/entry/files/pyroot/diag.log
-BASELINE="${SMOKE_IMAGE_BASELINE:-}"
 
 PASSES=0; FAILS=""
 ok()   { echo "  [PASS] $*"; PASSES=$((PASSES+1)); }
@@ -49,7 +47,101 @@ $HDC install -r "$HAP" 2>&1 | tail -1 | grep -qE "AppMod finish|success" || bad 
 $HDC shell "aa force-stop app.hackeris.hium" >/dev/null 2>&1 || true
 sleep 2
 $HDC shell "aa start -a EntryAbility -b app.hackeris.hium" >/dev/null 2>&1
-echo "  已启动, 等后端就绪..."
+echo "  已启动, 等门户 UI 稳定..."
+sleep 20   # 门户首帧实测 ~15-20s(2026-09-05)
+
+# ── W1 门户驱导(2026-09-05, docs/workspace-design.md)───────────────────────
+#   产品化=零自动启动(W1 环境门): 后端由「用户手势」触发 —— verify 以 UI 自动化执行同一手势。
+#   工具: 设备无 input 命令 → uitest uiInput(click/inputText/keyEvent);
+#   定位: uitest dumpLayout 动态取文本节点 bounds 中心(抗布局/文案微调);
+#   硬化: 每次注入前 aa start 拉回 App 前台(防用户正在用别的应用时误触, 2026-09-05 实判)。
+node_center() { # $1=节点文本/hint(placeholder) → 回显 "<cx> <cy>"
+  $HDC shell uitest dumpLayout -p /data/local/tmp/ul.xml >/dev/null 2>&1
+  $HDC file recv /data/local/tmp/ul.xml /tmp/smoke_ul.xml >/dev/null 2>&1
+  python3 - "$1" <<'PY'
+import json, re, sys
+d = json.load(open('/tmp/smoke_ul.xml', encoding='utf-8'))
+target = sys.argv[1].strip()
+out = []
+def walk(n):
+    a = n.get('attributes', {})
+    t = ((a.get('text') or a.get('originalText') or a.get('hint') or '')).strip()
+    if t and t == target:
+        m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', a.get('bounds', ''))
+        if m:
+            x1, y1, x2, y2 = map(int, m.groups())
+            out.append(f"{(x1 + x2) // 2} {(y1 + y2) // 2}")
+            return True
+    for c in n.get('children', []):
+        if walk(c):
+            return True
+    return False
+walk(d)
+print(out[0] if out else '')
+PY
+}
+ui_in() { $HDC shell "uitest uiInput $*" >/dev/null 2>&1; }
+
+# 门户驱导: 打开已有环境(第一个卡片)或新建 smoke-auto; 返回 0=已注入, 1=失败。
+#   坐标全部动态取自 uitest dumpLayout(文本/hint 节点中心), 不硬编码(抗布局微调)。
+portal_enter() {
+  # 前置: 把 App 拉回前台(硬化) —— 防用户正用别的应用时误触(2026-09-05 实判)
+  $HDC shell "aa start -a EntryAbility -b app.hackeris.hium" >/dev/null 2>&1
+  sleep 5
+  local TITLE CARD NB IN OKB
+  TITLE=$(node_center "我的环境")
+  if [ -n "$TITLE" ]; then
+    # 有环境: 取「我的环境」标题下方第一个文本节点 = 卡片名(第一项)
+    $HDC shell uitest dumpLayout -p /data/local/tmp/ul.xml >/dev/null 2>&1
+    $HDC file recv /data/local/tmp/ul.xml /tmp/smoke_ul.xml >/dev/null 2>&1
+    CARD=$(python3 - "$TITLE" <<'PY'
+import json, re, sys
+d = json.load(open('/tmp/smoke_ul.xml', encoding='utf-8'))
+ny = int(sys.argv[1].split()[1])
+res = []
+def walk(n):
+    a = n.get('attributes', {})
+    t = (a.get('text') or a.get('originalText') or '').strip()
+    m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', a.get('bounds', ''))
+    if m:
+        cy = (int(m.group(2)) + int(m.group(4))) // 2
+        if not res and t and cy > ny + 40:      # 标题下方第一处文本 = 卡片名
+            res.append(f"{(int(m.group(1)) + int(m.group(3))) // 2} {cy}")
+            return True
+    for c in n.get('children', []):
+        if walk(c):
+            return True
+    return False
+walk(d)
+print(res[0] if res else '')
+PY
+)
+    if [ -n "$CARD" ]; then
+      echo "  portal: 打开已有环境 @($CARD)"
+      ui_in click $CARD
+      return 0
+    fi
+  fi
+  # 空态 → 新建链: 新建环境 → 输入框(placeholder) → smoke-auto → 创建
+  NB=$(node_center "新建环境")
+  [ -z "$NB" ] && { echo "  portal: 门户未出现(新建环境按钮缺失)"; return 1; }
+  ui_in click $NB
+  sleep 4
+  IN=$(node_center "环境名称")
+  [ -z "$IN" ] && { echo "  portal: 新建对话框未出现(输入框缺失)"; return 1; }
+  ui_in click $IN
+  sleep 2
+  ui_in text smoke-auto
+  sleep 2
+  OKB=$(node_center "创建")
+  [ -z "$OKB" ] && { echo "  portal: 创建按钮缺失"; return 1; }
+  ui_in click $OKB
+  echo "  portal: 新建环境 smoke-auto"
+  return 0
+}
+
+echo "== [1b] 门户驱导(打开或新建环境) =="
+portal_enter && echo "  已注入用户手势, 等后端就绪..."
 
 # fport(宿主 8189 → 设备 8188)
 curl -s -m 4 http://127.0.0.1:8189/system_stats >/dev/null 2>&1 || hdc -t "$DEVICE" fport tcp:8189 tcp:8188 >/dev/null 2>&1 || true
@@ -103,7 +195,28 @@ if [ "$FAST" = 1 ]; then
   echo "  [--fast] 跳过出图"
 else
   WF="$ROOT/scripts/smoke_workflow_256x2.json"
-  RESP=$(curl -s -m 15 -X POST http://127.0.0.1:8189/prompt -H 'Content-Type: application/json' --data-binary @"$WF" 2>/dev/null || echo "")
+  # 2026-09-05 用户要求: smoke 图每次生成必须有差异(否则观感像"假生成");
+  #   且固定 seed 会命中 ComfyUI 执行缓存 → 二次出图"假成功"(T=0.0s)。
+  #   提交前把 prompt 内所有 seed 注入随机值: 每轮真执行 + 图像各异。
+  WF_TMP=$(mktemp /tmp/smoke_wf_XXXXXX.json)
+  python3 - "$WF" "$WF_TMP" <<'PYEOF' || { bad "seed 注入失败"; }
+import json, random, sys
+d = json.load(open(sys.argv[1]))
+def walk(o):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if k == 'seed':
+                o[k] = random.randint(0, 2 ** 31)
+            else:
+                walk(v)
+    elif isinstance(o, list):
+        for it in o:
+            walk(it)
+walk(d.get('prompt', {}))
+json.dump(d, open(sys.argv[2], 'w'))
+PYEOF
+  RESP=$(curl -s -m 15 -X POST http://127.0.0.1:8189/prompt -H 'Content-Type: application/json' --data-binary @"$WF_TMP" 2>/dev/null || echo "")
+  rm -f "$WF_TMP"
   PID=$(echo "$RESP" | python3 -c "import sys,json;print(json.load(sys.stdin).get('prompt_id',''))" 2>/dev/null || echo "")
   if [ -z "$PID" ]; then bad "prompt 未受理($RESP 前 80 字: $(echo "$RESP" | head -c 80))"
   else
