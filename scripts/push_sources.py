@@ -28,6 +28,7 @@ APPLY = "--apply" in sys.argv
 # 白名单(目录前缀/文件) —— 与仓库 .gitignore 边界一致
 KEEP_DIRS = (
     "entry/src/main/",     # 子树排除见下
+    "thirdparty/ohos-torch/",  # G4 定谳: OHOS torch/OpenBLAS 交叉构建脚本+补丁+stub(2026-09-05)
     "stub/",
     "scripts/",
     "patches/",
