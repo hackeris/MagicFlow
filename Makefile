@@ -13,7 +13,7 @@ BUNDLE = app.hackeris.hium
 # aarch64 设备要求签名 → 用 signed.hap（debug 签名材料 .ohos/, gitignored,见 README「签名材料」）
 HAP = entry/build/default/outputs/default/entry-default-signed.hap
 
-.PHONY: all hap check fetch extract stage zip rust prebuilt install deploy verify-device log clean clean-all help
+.PHONY: all hap check fetch extract stage zip rust prebuilt install deploy verify verify-device log clean clean-all help
 
 all: hap
 
@@ -66,6 +66,11 @@ deploy: install
 # ── ⑨ 真机验证一轮（run_and_capture.sh：采集→部署→信号轮询→摘要）──
 verify-device: install
 	bash scripts/run_and_capture.sh
+
+# ── ⑨b 一键黑盒 smoke（verify_smoke.sh: 装机→后端→BLAS/MM4x→出图固定判据; 4-5min）──
+verify: hap
+	bash scripts/verify_smoke.sh $(if $(SMOKE_ARGS),$(SMOKE_ARGS),)
+#   变体: make verify SMOKE_ARGS="--fast"  (只验后端/BLAS/MM4x)
 
 # 抓子进程/父进程日志
 log:
