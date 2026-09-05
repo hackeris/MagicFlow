@@ -3,10 +3,14 @@
 # 注意:两个仓库均为官方 huggingface 仓库的固定 commit（非浮点 HEAD）:
 #   tokenizers  = 7f1623b  "Bump version to 0.23.1"
 #   safetensors = a406ca3  "fix(release): move crates.io to trusted publisher OIDC"
-[submodule "thirdparty/tokenizers"]
+# ⚠ submodule 名=短名(git 规范, 2026-09-06 正规化): 曾用路径作名(submodule
+#   "thirdparty/tokenizers")。注: 当时 status 的 "?? thirdparty/*" 真因=子模块内
+#   未跟踪构建产物(bindings/python/target/.cargo, make rust 残留), 清理即净;
+#   短名规范化为额外改进, 非修复必需。
+[submodule "tokenizers"]
 	path = thirdparty/tokenizers
 	url = https://github.com/huggingface/tokenizers.git
-[submodule "thirdparty/safetensors"]
+[submodule "safetensors"]
 	path = thirdparty/safetensors
 	url = https://github.com/huggingface/safetensors.git
 # 前端源码 —— 自维护 fork 化(docs/frontend-fork-plan.md): hackeris/ComfyUI_frontend,
