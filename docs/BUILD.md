@@ -103,5 +103,4 @@ MatePad 11.5 S / 11.8GB RAM:F32 模型常驻 5.2G,推理峰值超 5.1G 即内核
 ## 8. 回退
 
 - HAP/torch 版本:git 历史 + `build/openblas-backup-pthread/`(pthread 版 OpenBLAS 旧库参考)。
-- 双区镜像:研究区 `comfy-ohos-port` 旧内容备份 `/data/share/comfy-ohos-port.old`(本人删除前继续保留)。
-- 权重回退:`scripts/push_sources.py --reverse`(白名单镜像,产物绝不跨区)。
+- 历史双区镜像已废弃(研究区 2026-09-05 清理; 其更早归档 = `/data/share/comfy-ohos-port.old`)。

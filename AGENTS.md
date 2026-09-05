@@ -42,11 +42,11 @@ make log clean clean-all
 - 工具链 = `/apps/harmony`（CLT 6.1.1.280）;**hvigor 6.24.2 官方原版（2026-09-03 已还原插件,
   勿再改 /apps/harmony 内文件）**。
 
-## 5. 双区纪律
+## 5. 单区纪律（2026-09-05 起）
 
-- 正规区 `/data/share/comfyui` = 代码库（**改这里**）；
-- 研究区 `/data/share/comfy-ohos-port` = 临时实验现场（DevEco 调试、真机试验）；
-- 研究区 → 正规区单向同步：`研究区/scripts/push_sources.sh`（白名单 rsync + --delete, 默认 dry-run）。
+- `/data/share/comfyui` = 唯一权威代码库（**改这里**）；
+- 早前研究区 `/data/share/comfy-ohos-port` 已于 2026-09-05 清理（git 提交即备份,
+  更早一份归档 = `/data/share/comfy-ohos-port.old`）；不存在第二副本。
 
 ## 6. 快速定位
 

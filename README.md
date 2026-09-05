@@ -125,11 +125,9 @@ CLT 6.1.1.280 / hvigor 6.24.2（**官方原版**，md5 `705309b0…`）/ SDK 6.1
   `USE_BLAS=OpenBLAS`（skh 发行树自带 libopenblas.a+头）。同时 cpuset 机制：app 非焦点（后台）
   = cpuset:background（3 小核 + 10min 单核>80% 配额 == 系统杀进程两轮实锤）；焦点 = top-app（12 核）。
 
-## 5. 双区协同（重要）
+## 5. 单区纪律（2026-09-05 起）
 
-- **本目录（`/data/share/comfyui`）= 正式项目/源码库**（git, 无大二进制, 全链可复现）。
-- **`/data/share/comfy-ohos-port` = 临时研究现场**（DevEco 调试、真机试验; git 仅 1 个 WIP 提交）。
-- 镜像同步工具 = 双区互备的 `scripts/push_sources.py`（白名单镜像 + 源端缺失即删 + 默认 dry-run）。
-  **S13 达成（2026-09-03）后方向裁决：正式修复一律落正规区,再 `--apply --reverse`
-  （正规区 → 研究区）让调试现场追平**；默认方向（研究区 → 正规区）仅当研究区有
-  新调试成果时才用,且会覆盖正规区侧修复,慎用。**改动一律先落正规区,研究区只跑实验**。
+- **唯一权威 = 本目录（`/data/share/comfyui`）**（git, 无大二进制, 全链可复现）。
+- 早前的研究区 `/data/share/comfy-ohos-port` 已于 2026-09-05 清理（内容可由本库 git+复现链重建;
+  更早一份归档保留在 `/data/share/comfy-ohos-port.old`）。
+- 任何改动/实验/验证一律在本目录进行,不存在"哪边对"的二义性。

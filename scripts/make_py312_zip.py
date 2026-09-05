@@ -28,8 +28,7 @@ VENV_SP = os.path.join(EXT_DIR or (os.path.join(ROOT, "externals")), "py-site")
 # run72 — sitecustomize 全局 stub:stdlib 内置 sitecustomize 缺失由 site 正常跳过(见下),
 # 而我们要把它做成「模型层 stub + 手工父链」全局注入点(内容 = build/stub/sitecustomize_tpl.py),
 # 执行时机 = CPython 启动最深处、任何用户代码之前 ⇒ 真 main.py 零改动即可享受 84 叶子预置。
-# run97（2026-09-03):stub 模板「双区定位」—— 正规区(/data/share/comfyui)模板在仓库根
-#   stub/,研究区(comfy-ohos-port)遗留 build/stub/;顶层 stub/ 优先,回退 build/stub/
+# run97（2026-09-03):stub 模板定位 —— 仓库根 stub/ 优先,回退 build/stub/(旧布局遗留)
 def _stub_ok(rel):
     _a = os.path.join(ROOT, "stub", rel)
     if os.path.isfile(_a):
