@@ -124,11 +124,19 @@ fetch_frontend() {
 }
 
 # ─────────────────────────────── ③ ComfyUI 源码 + patch ───────────────────────────────
+# 全部 OHOS patch(03 主/15 smoke/16 模型下载/17 模板路由)证据命中判定 —— SKIP 与
+# "本地已 patch 目录"共用, 防旧树缺新 patch 被 SKIP 短路(2026-09-05 W3)。
+ohos_patch_applied() { # $1=SRC 树
+    grep -q '_dynamo_disable' "$1/comfy/ldm/seedvr/model.py" 2>/dev/null \
+        && grep -q 'OHOS_MODEL_DL v1' "$1/server.py" 2>/dev/null \
+        && grep -q 'OHOS_TEMPLATES_DEFAULT_DIR v1' "$1/server.py" 2>/dev/null \
+        && [ -f "$1/templates/index.json" ]
+}
 fetch_comfyui_src() {
     log "③ ComfyUI 源码 @$COMFY_COMMIT + OHOS patch"
     local SRC="$EXT/comfyui-src"
     local SEED_REL="comfy/ldm/seedvr/model.py"
-    if grep -q '_dynamo_disable' "$SRC/$SEED_REL" 2>/dev/null && stamp_ok comfyui-src; then log "  [SKIP]"; return; fi
+    if ohos_patch_applied "$SRC" && stamp_ok comfyui-src; then log "  [SKIP]"; return; fi
     if [ "${COMFYUI_SRC_DIR:-}" != "" ] && [ -f "$COMFYUI_SRC_DIR/$SEED_REL" ]; then
         log "  [本地已 patch 目录] $COMFYUI_SRC_DIR"
         mkdir -p "$SRC" && cp -a "$COMFYUI_SRC_DIR"/. "$SRC/"
@@ -153,6 +161,19 @@ fetch_comfyui_src() {
     # patch 证据链
     ( cd "$SRC" && git diff --stat | grep -q '+' ) || die "③ patch 后无改动"
     grep -q '_dynamo_disable' "$SRC/$SEED_REL" || die "③ 证据串 _dynamo_disable 未命中（patch 内容不符）"
+    # ③c W3 模型下载/模板(patch 16/17, docs/model-download.md): 逐 patch 幂等 —— 旧树(仅 03/15)
+    #   在此补齐; 证据短板独立判定, 某 patch 失败必须死(防"缺功能仍继续"的假成功)。
+    if ! grep -q 'OHOS_MODEL_DL v1' "$SRC/server.py" 2>/dev/null; then
+        ( cd "$SRC" && git apply "$ROOT/patches/16-ohos-model-download.patch" ) || \
+            die "③c patch 16(模型下载)应用失败"
+        log "  [OK] 模型下载(16) applied"
+    fi
+    if ! grep -q 'OHOS_TEMPLATES_DEFAULT_DIR v1' "$SRC/server.py" 2>/dev/null || \
+       [ ! -f "$SRC/templates/index.json" ]; then
+        ( cd "$SRC" && git apply "$ROOT/patches/17-ohos-workflow-templates.patch" ) || \
+            die "③c patch 17(模板)应用失败"
+        log "  [OK] 模板(17) applied"
+    fi
     # ③b smoke 自检节点独立 patch(2026-09-05, docs/smoke-design.md): 幂等——节点文件在即 skip
     #   2026-09-05 补丁含 __init__.py(ComfyUI 目录型节点必带); 老版树(仅 custom_node.py)按产物补齐
     if ! grep -q 'OHOS_SmokeBench' "$SRC/custom_nodes/ohos_smoke/custom_node.py" 2>/dev/null; then

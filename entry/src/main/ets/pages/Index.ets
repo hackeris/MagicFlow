@@ -1,24 +1,22 @@
 import { startComfyChild } from 'libentry.so';
 import { ensureStdlib } from '../utils/Stdlib';
+import { ensureModels, getModelsRoot, modelPath } from '../utils/ModelsDir';
 import { fileIo } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { webview } from '@kit.ArkWeb';
 import { http } from '@kit.NetworkKit';
-import { request } from '@kit.BasicServicesKit';
 
 const DOMAIN = 0xD001;
 const TAG = 'ComfyUI';
 
-// ── 本地推理验证(2026-09-04): 模型自动拉取 ─────────────────────────────────
-//   通道: hdc rport tcp:18000 tcp:18001(设备→宿主反向隧道, 同机回环, 无外网依赖;
-//   宿主侧 python3 -m http.server 18001 暴露 SD-Turbo 2.6GB checkpoint)。
-//   落位: <filesDir>/pyroot/comfyui/models/checkpoints/sd_turbo.safetensors
-//   (ComfyUI 默认 models/checkpoints 即此, 安装重启后扫码即出)。
-const MODEL_URL = 'http://127.0.0.1:18000/sd_turbo.safetensors';
-const MODEL_REL = 'pyroot/comfyui/models/checkpoints/sd_turbo.safetensors';
+// ── 模型完整性自检(W3 产品语义, 2026-09-05)─────────────────────────────────
+//   落位(W3): <模型根>/checkpoints/sd_turbo.safetensors — 模型根 = 用户可见下载目录
+//   (ModelsDir.ets: picker 授权), 失败降级沙箱 pyroot/comfyui/models。
+//   下载 = 用户经 UI/后端端点(见 ensureModel 体内注释); 此处只治 0B 残留。
 
 async function ensureModel(actx: Context): Promise<boolean> {
-  const fp = `${actx.filesDir}/${MODEL_REL}`;
+  const info = await getModelsRoot(actx);
+  const fp = modelPath(info, 'checkpoints', 'sd_turbo.safetensors');
   // 磁盘标记点(2026-09-04): hilog 流不可靠(实测时有时无), 用文件系统 marker 做阶段落点,
   //   hdc shell(只读)可 ls 验证: mdf.1 mkdir-ok / mdf.2 dl-started / mdf.3 done / mdf.E-rc 失败码
   const mdfDir = `${actx.filesDir}/mdf`;
@@ -34,42 +32,38 @@ async function ensureModel(actx: Context): Promise<boolean> {
   hilog.info(DOMAIN, TAG, 'ensureModel called fp=%{public}s', fp);
   // ⚠ accessSync 返回 boolean(存在=true/不存在=false), 不抛异常; 只有权限失败才抛 13900012。
   //   必须判断返回值(先前直接裸调用 → 永远返回 hit, 下载永不触发 —— 2026-09-04 实锤)。
+  // 2026-09-05 W3 语义定谳(产品化): 自动下载退场 —— 模型下载由用户在 UI(缺模型条目/
+  //   catalog 对话框)经后端端点驱动(文档 docs/model-download.md); ensureModel 只做
+  //   「完整性自检 + 0B 残留清除」, 下载缺口交给 UI/verify(MODEL_DL=1 走端点)。
+  //   证据链: 实测 request.downloadFile 遇媒体区授权目录时只留 0B(且 marker 缺失),
+  //   自动链不可靠 + 与端点下载在同目录同目标并发冲突。
   if (fileIo.accessSync(fp)) {
-    md('hit');
-    return true;
+    try {
+      const st = fileIo.statSync(fp);
+      if (st.size > 0) {
+        md('hit');
+        return true;
+      }
+      fileIo.unlinkSync(fp);
+      md('0B-removed');
+      hilog.warn(DOMAIN, TAG, '0-byte model removed (download via UI/endpoint): %{public}s', fp);
+      return false;
+    } catch (e) {
+      // stat/unlink 失败(罕见): 保守当命中, 避免反复删写(有日志定位)
+      hilog.warn(DOMAIN, TAG, 'ensureModel stat fail: %{public}s', JSON.stringify(e));
+      md('hit');
+      return true;
+    }
   }
+  // 缺失(从未下载): 只记录, 不自动下载 —— 用户经 UI 下载(MODEL_DL=1 的 verify 判据[2.5]亦走端点)
   try {
-    fileIo.mkdirSync(`${actx.filesDir}/pyroot/comfyui/models/checkpoints`, true);
-    md('1-mkdir-ok');
+    fileIo.mkdirSync(`${info.root}/checkpoints`, true);
+    md('missing-no-autodl');
   } catch (e) {
     md('1-mkdir-fail');
     hilog.error(DOMAIN, TAG, 'mkdir fail: %{public}s', JSON.stringify(e));
   }
-  try {
-    md('2-dl-start');
-    const task = await request.downloadFile(actx, { url: MODEL_URL, filePath: fp });
-    return await new Promise<boolean>((resolve) => {
-      // 事件签名(API24): progress:(receivedSize,totalSize)=>void; fail:(err)=>void
-      task.on('progress', (receivedSize: number, totalSize: number) => {
-        hilog.info(DOMAIN, TAG, 'model download %{public}ld/%{public}ld',
-          receivedSize, totalSize);
-      });
-      task.on('complete', () => {
-        md('3-done');
-        hilog.info(DOMAIN, TAG, 'model download complete: %{public}s', fp);
-        resolve(true);
-      });
-      task.on('fail', (err: number) => {
-        md(String('E-' + err));
-        hilog.error(DOMAIN, TAG, 'model download fail rc=%{public}d', err);
-        resolve(false);
-      });
-    });
-  } catch (e) {
-    md('EX-err');
-    hilog.error(DOMAIN, TAG, 'model download ex: %{public}s', JSON.stringify(e));
-    return false;
-  }
+  return false;
 }
 
 // run94（2026-09-03):ArkWeb 接线 —— NCP 子进程后端(127.0.0.1:8188)由 launch() 拉起,
@@ -171,6 +165,9 @@ struct Index {
   async launch(actx: Context): Promise<void> {
     try {
       const pyroot = await ensureStdlib(actx);
+      // W3: 模型根先于子进程 —— yaml(extra_model_paths)必须早于后端 main.py 加载;
+      //   picker 授权在此串行, 不弹界面(DOWNLOAD 模式); 失败降级沙箱不影响启动。
+      await ensureModels(actx, pyroot);
       const entryParams = `phase0|127.0.0.1|8188|--cpu|pyroot=${pyroot}`;
       this.pid = startComfyChild(entryParams);
       // Py_Initialize 若内部 fatal，会把报错写进 <pyroot>/py-init.log（同 app 沙箱，父进程可读）。

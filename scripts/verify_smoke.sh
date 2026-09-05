@@ -145,6 +145,10 @@ portal_enter && echo "  已注入用户手势, 等后端就绪..."
 
 # fport(宿主 8189 → 设备 8188)
 curl -s -m 4 http://127.0.0.1:8189/system_stats >/dev/null 2>&1 || hdc -t "$DEVICE" fport tcp:8189 tcp:8188 >/dev/null 2>&1 || true
+# rport(设备 18080 → 宿主 18001): 模型源 http.server(/tmp/models, 服务 sd_turbo)。幂等自建。
+#   ⚠ 2026-09-05: 设备侧 18000 有残留隧道监听(hdcd 持有, 宿主侧通路已断), 重建会报
+#   "TCP Port listen failed" → 改用 18080。旧 18000 残留不碍事, 仅占端口。
+hdc -t "$DEVICE" rport tcp:18080 tcp:18001 >/dev/null 2>&1 || true
 
 backend_ok=0
 for i in $(seq 1 24); do
@@ -189,6 +193,86 @@ print(jj[0] if jj else '')
     fi
   fi
 fi
+
+echo "== [2.5] Q2 模型下载端到端(可选, MODEL_DL=1) =="
+#   W3 docs/model-download.md: 经后端端点下载(隧道 URL, 与 ensureModel 等价但走在端点上,
+#   验 202+进度+completed+落盘 全链)。媒体区已有完整 sd_turbo → skip(重复下载无意义)。
+#   ⚠ 2026-09-05 实测教训: skip 判据曾查 core /models/checkpoints(并集: 媒体区+沙箱),
+#   沙箱遗留祖传模型命中 → Q2 永被跳过 → 主链从未验证。改为媒体区目录直查字节数
+#   (下载端点落点 = 模型树首路径 = 媒体区; wc -c 失败/不足 1GB → 走下载链)。
+#   ⚠ 路径视图: 必须用 hdc 卷视图 /storage/media/100/...(shell 可见); `/storage/
+#   Users/currentUser/...` 仅 App 进程视图(w6 实测 shell No such file → 判据假 FAIL)。
+if [ "${MODEL_DL:-0}" = 1 ]; then
+  MEDIA_CKP="/storage/media/100/local/files/Docs/Download/app.hackeris.hium/models/checkpoints"
+  MB=$(hdc -t "$DEVICE" shell "wc -c < '$MEDIA_CKP/sd_turbo.safetensors' 2>/dev/null" 2>/dev/null | grep -o '[0-9]\+' | head -1)
+  if [ -n "$MB" ] && [ "$MB" -gt 1000000000 ]; then
+    ok "Q2 目标已具备(媒体区完整模型 ${MB}B)"
+  else
+    TASK=$(curl -s -m 15 -X POST http://127.0.0.1:8189/models/download \
+      -H 'Content-Type: application/json' \
+      --data-binary '{"url":"http://127.0.0.1:18080/sd_turbo.safetensors","directory":"checkpoints","filename":"sd_turbo.safetensors"}' 2>/dev/null || echo "")
+    TID=$(echo "$TASK" | python3 -c "import sys,json;print(json.load(sys.stdin).get('task_id',''))" 2>/dev/null || echo "")
+    if [ -z "$TID" ]; then
+      bad "Q2 下载任务未受理: ${TASK:0:120}"
+    else
+      FIN=""
+      for i in $(seq 1 60); do
+        sleep 10
+        ST=$(curl -s -m 8 "http://127.0.0.1:8189/models/download/$TID" 2>/dev/null || echo "")
+        S=$(echo "$ST" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('status',''))" 2>/dev/null || echo "")
+        echo "  dl status=$S $(echo "$ST" | python3 -c "import sys,json;d=json.load(sys.stdin);print(f'{d.get(1) if False else d.get(\"bytes_received\",0)}/{d.get(\"bytes_total\",0)}')" 2>/dev/null || true)"
+        [ "$S" = "completed" ] && { FIN=1; break; }
+        [ "$S" = "error" ] && { echo "  error: $ST" | head -c 300; break; }
+      done
+      if [ -n "$FIN" ]; then
+        # 状态机 completed ≠ 文件实锤: 媒体区直查大文件(≥1GB, 终点目录=模型树首路径)
+        MB2=$(hdc -t "$DEVICE" shell "wc -c < '$MEDIA_CKP/sd_turbo.safetensors' 2>/dev/null" 2>/dev/null | grep -o '[0-9]\+' | head -1)
+        if [ -n "$MB2" ] && [ "$MB2" -gt 1000000000 ]; then
+          ok "Q2 端点下载完成(媒体区落盘 ${MB2}B)"
+        else
+          bad "Q2 状态 completed 但媒体区落盘不足(疑 staging/路径错): ${MB2:-无文件}"
+        fi
+      else
+        bad "Q2 端点下载未完成(≤600s)"
+      fi
+    fi
+  fi
+fi
+
+echo "== [3] W3: 模型下载端点 + 模型可见性 =="
+#   2026-09-05 W3(docs/model-download.md): patch 16 端点 catalog 可达 + extra_model_paths
+#   is_default 生效(模型树上可见 sd_turbo)。只验端点与本地可见性, 不依赖外网。
+CAT=$(curl -s -m 8 http://127.0.0.1:8189/models/download/catalog 2>/dev/null || echo "")
+echo "$CAT" | python3 -c "
+import sys,json
+try:
+    d=json.load(sys.stdin)
+    assert any(e.get('id')=='sd-turbo' for e in d.get('catalog',[]))
+except Exception: print('BAD')
+else: print('OK')
+" 2>/dev/null | grep -q OK && ok "W3 catalog 可达(含 sd-turbo)" || bad "W3 catalog 不可达/缺条目: ${CAT:0:120}"
+MEL=$(curl -s -m 8 http://127.0.0.1:8189/models/checkpoints 2>/dev/null || echo "")
+echo "$MEL" | python3 -c "
+import sys,json
+try:
+    l=json.load(sys.stdin)
+    assert any('sd_turbo' in str(x) for x in l)
+except Exception: print('BAD')
+else: print('OK')
+" 2>/dev/null | grep -q OK && ok "W3 模型可见(checkpoints 含 sd_turbo, is_default 首位生效)" || bad "W3 模型不可见(extra_model_paths 未生效?): ${MEL:0:120}"
+
+echo "== [4.5] W3 模板(patch 17, Q4) =="
+#   /templates/index.json 官方由 comfyui-workflow-templates pip 包提供(设备缺 → patch 17
+#   的 web.static 补上 comfyui 根 templates/)。验: 200 + 内容含 sd-turbo 模板条目。
+TMP=$(curl -s -m 8 http://127.0.0.1:8189/templates/index.json 2>/dev/null || echo "")
+echo "$TMP" | python3 -c "
+import sys,json
+try:
+    d=json.load(sys.stdin)
+    assert isinstance(d,list) and len(d)>=1 and 'sd_turbo' in str(d)
+except Exception: print('BAD')
+else: print('OK')
+" 2>/dev/null | grep -q OK && ok "W3 模板路由可达(含 sd-turbo 条目)" || bad "W3 模板不可达: ${TMP:0:120}"
 
 echo "== [4] 判据 C: 出图 =="
 if [ "$FAST" = 1 ]; then

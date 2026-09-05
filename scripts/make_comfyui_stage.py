@@ -22,7 +22,7 @@ VENV_SP = os.path.join(EXT, "py-site")          # fetch 的 pip --target 产物�
 COMFY_SRC = os.path.join(EXT, "comfyui-src")    # fetch 的 clone+patch 仓库
 FE_SRC = os.path.join(ROOT, "thirdparty/comfyui-frontend/dist")  # 自建 dist: build_frontend.sh 产物
 #   (2026-09-05 「F 口」: 官方 dist zip 退场, 前端=fork 源码树 stable tag v1.54.4 构建; docs/frontend-fork-plan.md)
-FE_INDEX_MD5 = "19064c6fea0f3473aa2a6cd095b815b8"  # 自建 index.html 锚(源码 v1.54.4; 与 pins.tsv 一致)
+FE_INDEX_MD5 = "570f65255453096137adece937512eca"  # 自建 index.html 锚(源码 v1.54.4+ohos 758f5ba; 与 pins.tsv 一致)
 OUT = os.path.join(ROOT, "build/pyroot-stage")
 
 # stage 依赖包（venv site-packages 内顶层名 → 目标 zip 相对名）。psutil 单文件特例见下。
@@ -200,6 +200,10 @@ def main():
             os.path.isfile(os.path.join(OUT, "comfyui/comfy_api/input/__init__.py")),
         "frontend_static/index.html（自建 dist 锚, v1.54.4）":
             os.path.isfile(os.path.join(OUT, "comfyui/frontend_static/index.html")),
+        # W3 轻量模板(patch 17, docs/model-download.md): 模板目录随源码树拷入,
+        #   缺失说明 patch 17 未应用/旧树缺包 —— 必须 fail-fast
+        "comfyui/templates/index.json（W3 轻量模板, patch 17）":
+            os.path.isfile(os.path.join(OUT, "comfyui/templates/index.json")),
         "site-packages/psutil.py（stub 注入）":
             os.path.isfile(os.path.join(OUT, "lib/python3.12/site-packages/psutil.py")),
         "0 个 .so 混入（铁律）": not bad,
