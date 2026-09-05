@@ -77,7 +77,7 @@ const POLL_MAX_MS = 240000;
 //   W1 门户(官方 Chooser 同构: 环境列表/新建/环境名输入)整体撤出 —— 环境管理是
 //   桌面时代虚构需求: 官方 workspace=云账户作用域(调研实证), 本地后端恒为单一。
 //   保留「零自动启动」实质: 重设施(zip 解压/torch 全量装载/子进程)只在用户点击
-//   「启动 ComfyUI」后才发生 —— onAppear 不拉起任何东西。
+//   「启动 梦幻之流」后才发生 —— onAppear 不拉起任何东西。
 //   启动进度(2026-09-05): 4 步阶段, 信号源全为真: ①ensureStdlib/ensureModels 完成
 //   ②startComfyChild 调用 ③poll /system_stats 200 = 后端就绪; torch 装载期后端
 //   无信号, 以「已用时长」展示(首次约 90s, 判据 backend ready 不变)。
@@ -301,12 +301,12 @@ struct Index {
           // ── 官方同构启动页(Brand Takeover, 2026-09-05): 品牌区 + 单调进度条 +
           //    4 步真实阶段 + 装载期叙事文案循环 + 可折叠日志终端 ──
           Column() {
-            Text('ComfyUI')
+            Text('梦幻之流')
               .fontSize(42)
               .fontWeight(FontWeight.Bold)
               .fontColor(0xffffff)
               .margin({ top: 56 })
-            Text('HarmonyOS 本地 AI 推理')
+            Text('MagicFlow · HarmonyOS 本地 AI 推理')
               .fontSize(14)
               .fontColor(0x8899AA)
               .margin({ top: 4 })
@@ -416,18 +416,18 @@ struct Index {
           .backgroundColor(0x101418)
         }
       } else {
-        // ── 单入口首页(2026-09-05): 固定环境卡 +「启动 ComfyUI」; 无环境管理 ──
+        // ── 单入口首页(2026-09-05): 固定环境卡 +「启动 梦幻之流」; 无环境管理 ──
         Column() {
-          Text('ComfyUI')
+          Text('梦幻之流')
             .fontSize(34)
             .fontWeight(FontWeight.Bold)
             .fontColor(0x123b6d)
             .margin({ top: 80, bottom: 8 })
-          Text('HarmonyOS 本地 AI 推理')
+          Text('MagicFlow · HarmonyOS 本地 AI 推理')
             .fontSize(14)
             .fontColor(0x888888)
           Column() {
-            Text('ComfyUI 环境')
+            Text('梦幻之流 环境')
               .fontSize(20)
               .fontWeight(FontWeight.Medium)
             Text('SD-Turbo 256×256 · 低内存形态')
@@ -446,7 +446,7 @@ struct Index {
           .alignItems(HorizontalAlign.Start)
           .margin({ top: 36 })
 
-          Button('启动 ComfyUI')
+          Button('启动 梦幻之流')
             .width('70%')
             .height(50)
             .fontSize(17)

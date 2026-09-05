@@ -2,15 +2,15 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "ComfyUI on HarmonyOS"
+      "value": "MagicFlow on HarmonyOS"
     },
     {
       "name": "EntryAbility_desc",
-      "value": "ComfyUI desktop port"
+      "value": "MagicFlow desktop port"
     },
     {
       "name": "EntryAbility_label",
-      "value": "ComfyUI"
+      "value": "梦幻之流"
     }
   ]
 }

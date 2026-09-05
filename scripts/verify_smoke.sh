@@ -52,7 +52,7 @@ sleep 20   # 首页首帧实测 ~15-20s(2026-09-05)
 
 # ── 门户驱导(2026-09-05 单入口化, docs/workspace-design.md)─────────────────
 #   产品化=零自动启动: 后端由「用户手势」触发 —— verify 以 UI 自动化执行同一手势
-#   (点首页「启动 ComfyUI」; W1 环境管理/多步新建链已撤出设备形态)。
+#   (点首页「启动 梦幻之流」; W1 环境管理/多步新建链已撤出设备形态)。
 #   工具: 设备无 input 命令 → uitest uiInput(click/inputText/keyEvent);
 #   定位: uitest dumpLayout 动态取文本节点 bounds 中心(抗布局/文案微调);
 #   硬化: 每次注入前 aa start 拉回 App 前台(防用户正在用别的应用时误触, 2026-09-05 实判)。
@@ -83,17 +83,17 @@ PY
 }
 ui_in() { $HDC shell "uitest uiInput $*" >/dev/null 2>&1; }
 
-# 门户驱导(单入口, 2026-09-05): 点首页「启动 ComfyUI」按钮; 返回 0=已注入, 1=失败。
+# 门户驱导(单入口, 2026-09-05): 点首页「启动 梦幻之流」按钮; 返回 0=已注入, 1=失败。
 #   坐标全部动态取自 uitest dumpLayout(文本节点中心), 不硬编码(抗布局微调)。
 portal_enter() {
   # 前置: 把 App 拉回前台(硬化) —— 防用户正用别的应用时误触(2026-09-05 实判)
   $HDC shell "aa start -a EntryAbility -b app.hackeris.hium" >/dev/null 2>&1
   sleep 5
   local NB
-  NB=$(node_center "启动 ComfyUI")
+  NB=$(node_center "启动 梦幻之流")
   [ -z "$NB" ] && { echo "  portal: 首页未出现(启动按钮缺失)"; return 1; }
   ui_in click $NB
-  echo "  portal: 点击『启动 ComfyUI』"
+  echo "  portal: 点击『启动 梦幻之流』"
   return 0
 }
 
