@@ -20,8 +20,9 @@ EXT = os.environ.get("EXT_DIR", os.path.join(ROOT, "externals"))
 STUB_DIR = os.environ.get("STUB_DIR", os.path.join(ROOT, "stub"))
 VENV_SP = os.path.join(EXT, "py-site")          # fetch 的 pip --target 产物（纯 py 依赖集）
 COMFY_SRC = os.path.join(EXT, "comfyui-src")    # fetch 的 clone+patch 仓库
-FE_SRC = os.path.join(EXT, "frontend-dist")     # fetch 解压的官方前端 dist 根
-FE_INDEX_MD5 = "61a69562c29975642b296c553cd96d32"  # 官方前端 index.html 锚（v1.54.1, 与 pins.tsv 一致）
+FE_SRC = os.path.join(ROOT, "thirdparty/comfyui-frontend/dist")  # 自建 dist: build_frontend.sh 产物
+#   (2026-09-05 「F 口」: 官方 dist zip 退场, 前端=fork 源码树 stable tag v1.54.4 构建; docs/frontend-fork-plan.md)
+FE_INDEX_MD5 = "19064c6fea0f3473aa2a6cd095b815b8"  # 自建 index.html 锚(源码 v1.54.4; 与 pins.tsv 一致)
 OUT = os.path.join(ROOT, "build/pyroot-stage")
 
 # stage 依赖包（venv site-packages 内顶层名 → 目标 zip 相对名）。psutil 单文件特例见下。
@@ -134,7 +135,7 @@ def main():
 
     # 1) comfyui 仓库根
     copytree_filter(COMFY_SRC, os.path.join(OUT, "comfyui"), SRC_EXCLUDE_DIRS, (".pyc",), SRC_ROOT_ONLY)
-    # 1b) frontend_static —— 注入 fetch_externals.sh 解压的官方前端 dist。
+    # 1b) frontend_static —— 注入自建 dist（thirdparty/comfyui-frontend/dist, 源码 stable tag 构建）。
     #   ⚠ fail-fast：官方 dist 缺失即整体失败（不存在「占位页继续」的降级 —— 那会导致
     #   HAP 装上后白板站点，是最难排查的假成功）。
     fe_dir = os.path.join(OUT, "comfyui/frontend_static")
@@ -147,9 +148,9 @@ def main():
             print(f"  FATAL: frontend_static/index.html md5={m} ≠ 锚 {FE_INDEX_MD5}（错误包? 重跑 fetch_externals.sh）",
                   file=sys.stderr)
             return 2
-        print(f"  [OK] frontend_static = 官方 frontend dist（index.html 锚 ✓）")
+        print(f"  [OK] frontend_static = 自建 frontend dist（index.html 锚 ✓）")
     else:
-        print(f"  FATAL: 官方前端 dist 缺失 {FE_SRC}（请先: bash scripts/fetch_externals.sh）", file=sys.stderr)
+        print(f"  FATAL: 前端 dist 缺失 {FE_SRC}（请先: bash scripts/build_frontend.sh --skip-install）", file=sys.stderr)
         return 2
     # 2) 纯 py 依赖 → 站点包段
     spout = os.path.join(OUT, "lib/python3.12/site-packages")
@@ -197,7 +198,7 @@ def main():
         # run96 教训:comfy_api/input 官方兼容层包必须进（_io.py 引用 comfy_api.input）
         "comfyui/comfy_api/input/__init__.py（官方 input 包）":
             os.path.isfile(os.path.join(OUT, "comfyui/comfy_api/input/__init__.py")),
-        "frontend_static/index.html（官方 dist 锚）":
+        "frontend_static/index.html（自建 dist 锚, v1.54.4）":
             os.path.isfile(os.path.join(OUT, "comfyui/frontend_static/index.html")),
         "site-packages/psutil.py（stub 注入）":
             os.path.isfile(os.path.join(OUT, "lib/python3.12/site-packages/psutil.py")),

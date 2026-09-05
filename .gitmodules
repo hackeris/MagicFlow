@@ -9,3 +9,10 @@
 [submodule "thirdparty/safetensors"]
 	path = thirdparty/safetensors
 	url = https://github.com/huggingface/safetensors.git
+# 前端源码 —— 官方稳定 tag 且自维护 fork 化(docs/frontend-fork-plan.md)。
+#   upstream: Comfy-Org/ComfyUI_frontend; 当前 pin 稳定 tag v1.54.4(8d24aed)。
+#   构建链: scripts/build_frontend.sh → thirdparty/comfyui-frontend/dist → stage 前端注入。
+[submodule "thirdparty/comfyui-frontend"]
+	path = thirdparty/comfyui-frontend
+	url = https://github.com/Comfy-Org/ComfyUI_frontend.git
+	branch = main

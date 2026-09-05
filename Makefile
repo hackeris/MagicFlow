@@ -34,8 +34,12 @@ extract: fetch
 		echo "[extract] skh-run.tar.gz → build/skh-run-extract/"; \
 	else echo "[extract] 已存在"; fi
 
+# ── ②b 前端自建 dist（fork 源码树 stable tag; 幂等: 源 commit 变才重建）──
+frontend: fetch
+	bash scripts/build_frontend.sh --skip-install
+
 # ── ③ comfyui 源码 → staging（校验：官方 input 包/前端锚/0 个 .so）──
-stage: extract
+stage: extract frontend
 	python3 scripts/make_comfyui_stage.py
 
 # ── ④ rust 扩展重编译（thirdparty/ submodule 源码; 需 skh 树提供系统 libc++.so.1(__1) 链接）──

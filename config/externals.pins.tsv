@@ -6,9 +6,9 @@
 
 skh-run.tar.gz	lfs	https://gitcode.com/openharmony-robot/thirdparty_pytorch.git	d6d6bfcfea0735919fc9a3abedaa96cbda1cf082fbcbc8574fa2ef1a19725406	544835856	LFS路径 test/skh-run.tar.gz(LFS oid 前缀 d6d6bfcfea 与 sha256 自洽)。Python3.12.7+torch2.10.0+scipy/PIL 等 OHOS aarch64 栈,解包后含 usr/lib/python3.12 与 .cargo/config.toml(abbr 真源)
 
-comfyui-frontend-dist.zip	url	https://github.com/Comfy-Org/ComfyUI_frontend/releases/download/v1.54.1/dist.zip	a89cf5e8afed3f6bc00c3a2d68bd43a69ecc0c7dbfd7d9a05ee3c4c18d248806	24601619	官方前端 dist v1.54.1;解压后 index.html md5 必须=61a69562c29975642b296c553cd96d32(二次锚,见下)
+comfyui-frontend-dist.zip	url	https://github.com/Comfy-Org/ComfyUI_frontend/releases/download/v1.54.1/dist.zip	a89cf5e8afed3f6bc00c3a2d68bd43a69ecc0c7dbfd7d9a05ee3c4c18d248806	24601619	官方前端 dist v1.54.1;解压后 index.html md5 必须=19064c6fea0f3473aa2a6cd095b815b8(二次锚,见下)
 
-comfyui-frontend-index.html	md5	-	61a69562c29975642b296c553cd96d32	-	前端 dist 解压目录内 index.html 的 md5(防"下载到了 npm minified 板"等错误包)
+comfyui-frontend-index.html	md5	-	19064c6fea0f3473aa2a6cd095b815b8	-	前端自建 dist(thirdparty/comfyui-frontend/dist, 源码 v1.54.4)内 index.html md5(防"下载到了 npm minified 板"等错误包)
 
 comfyui-src	git	https://github.com/comfyanonymous/ComfyUI.git	03468f4	-	commit=03468f4;clone 后 checkout,再 git apply --check patches/comfyui-src-ohos-changes.patch;apply 后 seedvr/model.py 须含 _dynamo_disable 证据串(见 fetch 脚本校验)
 
@@ -20,3 +20,4 @@ pytorch-src	git	https://github.com/pytorch/pytorch.git	449b1768410104d3ed79d3bcf
 openblas-src	git	https://github.com/OpenMathLib/OpenBLAS.git	8795fc7985635de1ecf674b87e2008a15097ffab	-	v0.3.29 tag commit=8795fc7; fetch clone --branch v0.3.29; 补丁 13/14 由 build_openblas_ohos.sh 应用; 旧 externals/openblas(本地态)仅作 local repo 回退
 py312-host	url	https://www.python.org/ftp/python/3.12.7/Python-3.12.7.tgz	73ac8fe780227bf371add8373c3079f42a0dc62deff8d612cd15a618082ab623	27016272	host python3.12 源码 tar(src 自编→/opt/py312; SOABI=cpython-312 与设备解释器成套; build_torch_ohos.sh 跑 setup.py 用); 编译由 scripts/bootstrap_worktree.sh 负责; 本机 /opt/py312 即由此 tar 编出
 
+comfyui-frontend-src	git	https://github.com/Comfy-Org/ComfyUI_frontend.git	8d24aed6c469df8fba9907bdb9b0b5a507fb56eb	-	前端源码树(稳定 tag v1.54.4, 2026-09-05; 用户 fork 后 remote 可换自维护仓库; 用途=自建 dist(scripts/build_frontend.sh), 官方 dist zip 条目保留为回退)

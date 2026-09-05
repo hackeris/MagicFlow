@@ -4,8 +4,8 @@
 # 产品（均为 gitignore 的构建输入，仓库不存二进制）：
 #   externals/skh-run.tar.gz             OHOS aarch64 Python3.12.7+torch2.10.0 栈（544835856B，sha256 pin）
 #   externals/comfyui-src/               ComfyUI @03468f4 + patches 应用（OHOS 修改）
-#   externals/comfyui-frontend-dist.zip  官方前端 dist v1.54.1（24601619B，sha256 pin）
-#   externals/frontend-dist/             dist.zip 解压（stage 注入用；index.html md5 二次锚）
+#   thirdparty/comfyui-frontend/        前端源码(submodule) @稳定 tag v1.54.4 —— 自建 dist 之源
+#                                        （build_frontend.sh; 官方 dist zip 已退场, 回退 pin 条目仍在）
 #   externals/py-site/                   纯 py 依赖集（venv-requirements-port.txt 驱动，离线两步）
 #   externals/wheels/host/               pip download 缓存（离线可重放）
 #
@@ -54,8 +54,6 @@ for line in open(pins, encoding="utf-8"):
 EOF
 }
 SKH_SHA="$(pin_get skh-run.tar.gz sha256)";      SKH_SIZE="$(pin_get skh-run.tar.gz size)"
-FE_SHA="$(pin_get comfyui-frontend-dist.zip sha256)"; FE_SIZE="$(pin_get comfyui-frontend-dist.zip size)"
-FE_HTML_MD5="$(pin_get comfyui-frontend-index.html sha256)"
 COMFY_COMMIT="$(pin_get comfyui-src sha256)"
 ZIP_SHA="$(pin_get python312.zip sha256)";        ZIP_SIZE="$(pin_get python312.zip size)"
 
@@ -98,30 +96,31 @@ fetch_skh() {
     stamp_set skh-run; log "  [OK] gitcode LFS"
 }
 
-# ─────────────────────────────── ② 前端 dist ───────────────────────────────
+# ─────────────────────────────── ② 前端源码(自维护 fork; 官方 dist zip 退场) ───────────────────────────────
 fetch_frontend() {
-    log "② ComfyUI 前端 dist v1.54.1"
-    if check_file "$EXT/comfyui-frontend-dist.zip" "$FE_SHA" "$FE_SIZE" 2>/dev/null && \
-       [ "$(md5sum "$EXT/frontend-dist/index.html" 2>/dev/null | awk '{print $1}')" = "$FE_HTML_MD5" ] && stamp_ok frontend
-    then log "  [SKIP]"; return; fi
-    local ZIP="$EXT/comfyui-frontend-dist.zip"
-    if [ "${FRONTEND_DIST_ZIP:-}" != "" ] && [ -f "$FRONTEND_DIST_ZIP" ]; then ZIP="$FRONTEND_DIST_ZIP"; fi
-    if check_file "$ZIP" "$FE_SHA" "$FE_SIZE" 2>/dev/null; then
-        : # 已有好文件
+    log "② ComfyUI 前端源码(C) @v1.54.4(稳定 tag, 非 nightly)"
+    local FE="$ROOT/thirdparty/comfyui-frontend"
+    local PIN="$(pin_get comfyui-frontend-src sha256)"
+    # [SKIP] 条件: 树在且 HEAD=pin commit
+    if [ -d "$FE/.git" ] && [ "$(git -C "$FE" rev-parse HEAD 2>/dev/null)" = "$PIN" ] && stamp_ok frontend-src; then
+        log "  [SKIP] 前端源码 $PIN"
+        return
+    fi
+    if [ -d "$FE/.git" ]; then
+        # 已有树(可能由 submodule 链带出): 对齐 pin commit
+        git -C "$FE" fetch --depth 1 origin "$PIN" 2>&1 | tail -1 || true
+        git -C "$FE" checkout "$PIN" 2>&1 | tail -1 || die "② 前端源码 checkout $PIN 失败"
     else
-        [ "$OFFLINE" = 1 ] && die "② --offline 无前端 zip（FRONTEND_DIST_ZIP=/tmp/comfyui_frontend_dist.zip 可指）"
-        curl -fsSL -o "$EXT/.fe.part" "$(pin_get comfyui-frontend-dist.zip url)"
-        mv "$EXT/.fe.part" "$ZIP"
+        # 无树: 经 submodule 初始化(主仓 .gitmodules 条目; 深度 1)
+        ( cd "$ROOT" && git submodule update --init --depth 1 thirdparty/comfyui-frontend ) || \
+            die "② 前端源码 submodule 初始化失败"
+        [ "$(git -C "$FE" rev-parse HEAD)" = "$PIN" ] || \
+            ( git -C "$FE" fetch --depth 1 origin "$PIN" && git -C "$FE" checkout "$PIN" ) || \
+            die "② 前端源码对齐 pin($PIN) 失败"
     fi
-    check_file "$ZIP" "$FE_SHA" "$FE_SIZE" || die "② 前端 zip 校验失败"
-    # 解压 + index.html 二次锚
-    if ! [ -f "$EXT/frontend-dist/index.html" ]; then
-        mkdir -p "$EXT/frontend-dist"
-        ( cd "$EXT/frontend-dist" && unzip -q -o "$ZIP" )
-    fi
-    local m="$(md5sum "$EXT/frontend-dist/index.html" | awk '{print $1}')"
-    [ "$m" = "$FE_HTML_MD5" ] || die "② 解压后 index.html md5=$m ≠ $FE_HTML_MD5（错误包？）"
-    stamp_set frontend; log "  [OK] dist.zip + index.html 锚"
+    local H="$(git -C "$FE" rev-parse HEAD)"
+    [ "$H" = "$PIN" ] || die "② 前端源码 head=$H ≠ pin=$PIN"
+    stamp_set frontend-src; log "  [OK] 前端源码 @${H:0:12}（构建见 make frontend → build_frontend.sh）"
 }
 
 # ─────────────────────────────── ③ ComfyUI 源码 + patch ───────────────────────────────
