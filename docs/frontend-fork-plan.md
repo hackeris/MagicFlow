@@ -19,9 +19,12 @@
 comfyui 主仓库
 ├── thirdparty/
 │   ├── comfyui-frontend/        ★ 前端源码(submodule 化, 同 safetensors 先例);
-│   │      上游 remote = 官方 Comfy-Org/ComfyUI_frontend@v1.54.4;
-│   │      用户 fork 后 remote 换成自维护仓库(go 记录, fetch 链不依赖 remote 名);
-│   │      定制改动落本树 feature 分支(与官方 tag 分叉, diff 可追踪)
+│   │      origin = git@github.com:hackeris/ComfyUI_frontend.git(自维护 fork);
+│   │      默认分支 ohos = 定制线(基线 = 官方稳定 tag v1.54.4 commit 8d24aed);
+│   │      upstream = git@github.com:Comfy-Org/ComfyUI_frontend.git(官方, 只取源);
+│   │      定制 commit 全落 ohos; 官方升 tag → fetch upstream tag → ohos rebase
+│   │      (注: 该仓库 husky pre-push 在 node22 壳下崩, 本地 push 用
+│   │        git -c core.hooksPath=/dev/null push; fetch 链按 pin sha 取, 不依赖分支名)
 │   ├── ohos-torch/ …(既有)  safetensors/ tokenizers/(既有 submodule)
 ├── scripts/
 │   ├── fetch_externals.sh      + ⑤⑪ 前端源码 clone(@pins 中版本; 官方 dist zip 下载退场)
@@ -40,7 +43,7 @@ comfyui 主仓库
 
 - 跟随官方 **release tag**(当前 v1.54.4 = 2026-09-05 稳定), 不用 main/nightly;
 - 版本升级路径: 官方新 release → 主项目升级 tag(改 pins+rerun fetch/build) — 小/中等成本(构建分钟级);
-- 用户定制散点: 在 `thirdparty/comfyui-frontend`(独立 git 分叉)记 commit; 官方 tag 升级时 rebase, 补丁冲突在定制的 diff 里消化。
+- 用户定制散点: 在 fork 的 `ohos` 分支记 commit(基线 = 官方 tag); 官方 tag 升级时 rebase ohos, 补丁冲突在定制的 diff 里消化。
 
 ## 4. 定制层设计(将来, 本项目无定制先例时守住)
 

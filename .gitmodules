@@ -9,10 +9,12 @@
 [submodule "thirdparty/safetensors"]
 	path = thirdparty/safetensors
 	url = https://github.com/huggingface/safetensors.git
-# 前端源码 —— 官方稳定 tag 且自维护 fork 化(docs/frontend-fork-plan.md)。
-#   upstream: Comfy-Org/ComfyUI_frontend; 当前 pin 稳定 tag v1.54.4(8d24aed)。
+# 前端源码 —— 自维护 fork 化(docs/frontend-fork-plan.md): hackeris/ComfyUI_frontend,
+#   默认分支 ohos(= 定制线, 基线 = 官方稳定 tag v1.54.4(8d24aed)); 官方 source 同步:
+#   git fetch upstream tag → ohos rebase; 本地 push 该仓库需 -c core.hooksPath=/dev/null
+#   (husky pre-push 在 node22 壳下崩, 钩子只 lint, 推官方 commit 无必要)。
 #   构建链: scripts/build_frontend.sh → thirdparty/comfyui-frontend/dist → stage 前端注入。
 [submodule "thirdparty/comfyui-frontend"]
 	path = thirdparty/comfyui-frontend
-	url = https://github.com/Comfy-Org/ComfyUI_frontend.git
-	branch = main
+	url = git@github.com:hackeris/ComfyUI_frontend.git
+	branch = ohos
