@@ -1061,12 +1061,10 @@ static void dlopen_python_check(const char *entryParams)
         DIAG("Py_Initialize returned; Py_IsInitialized after = %d", Py_IsInitialized());
         LOGI("Py_IsInitialized after  init = %{public}d", Py_IsInitialized());
         if (Py_IsInitialized() && PyRun_SimpleString) {
-            int r = PyRun_SimpleString("import os; print('COMFTEST py ok, os=%s' % os.__name__)");
+            // 启动自诊断(非测试): stdlib 可达性签名(site path 落 diag.log; smoke 判据不依赖此处)
+            int r = PyRun_SimpleString("import os, site; print('PYROOT path0=', sys.path[0])");
             LOGI("PyRun_SimpleString rc=%{public}d", r);
-            DIAG("PyRun import.os (COMFTEST) rc=%d", r);
-            int r2 = PyRun_SimpleString("import site, sys; print('COMFTEST site path0=%s' % sys.path[0])");
-            LOGI("site import rc=%{public}d", r2);
-            DIAG("PyRun import.site rc=%d", r2);
+            DIAG("PyRun import.os/site rc=%d", r);
         }
     } else {
         DIAG("SKIP Py_Initialize (Py_IsInitialized=%p Py_Initialize=%p)", (void *)Py_IsInitialized, (void *)Py_Initialize);
@@ -1219,39 +1217,9 @@ static void dlopen_python_check(const char *entryParams)
         // OPENBLAS_NUM_THREADS 初始化——必须早于任何 GEMM; CORETYPE 强制 ARMV8 内核路径。
         setenv("OPENBLAS_NUM_THREADS", "12", 1);
         setenv("OPENBLAS_CORETYPE", "ARMV8", 1);
-        // 命门③ 的「可执行」验证：不仅 import torch._C，还要跑一个真实 CPU 张量算子。
-        // torch.ones(2,3).sum() 会调度到 libtorch_cpu（链系统 libc++.so.1=std::__1）执行 C++ ATen 代码，
-        // 真正证明「__1 命名空间统一 + torch CPU 栈加载」都成立（而非仅符号可解析）。
-        int r = PyRun_SimpleString(
-            "import torch, sys; t=torch.ones(2,3); "
-            "print('COMFTEST torch import ok, version=%s' % torch.__version__); "
-            "print('COMFTEST torch._C=', torch._C); "
-            "print('COMFTEST tensor sum=%s' % t.sum().item()); "
-            "print('COMFTEST is_cuda=', torch.cuda.is_available() if hasattr(torch,'cuda') else 'na')");
-        LOGI("torch import rc=%{public}d", r);
-        DIAG("torch import (COMFTEST) rc=%d", r);
-#ifndef RELEASE_BUILD
-        // G4 第一举证(run-G4-1): BLAS 后端举证 + 默认线程 sanity MM。
-        r = PyRun_SimpleString(
-            "import torch, time; "
-            "cfg=[l for l in torch.__config__.show().splitlines() if 'BLAS' in l or 'OPENBLAS' in l.upper()]; "
-            "print('COMFTEST-BLAS ' + ' | '.join(cfg)); "
-            "a=torch.rand(2048,2048); b=torch.rand(2048,2048); "
-            "t0=time.time(); a@b; "
-            "print('COMFTEST-MM t=%.2f nthreads=%d' % (time.time()-t0, torch.get_num_threads()))");
-        DIAG("torch MM (run-G4-1) rc=%d", r);
-        // G4 验收探针(run-G4-2): 多线程 4×MM —— 判据 MM4x < 2.0s(12 核 GEMM 生效)。
-        // 注意: compound statement(for/def)不能跟在 ';' 分号后 —— 全部整行走换行。
-        r = PyRun_SimpleString(
-            "import torch, time\n"
-            "torch.set_num_threads(12)\n"
-            "a=torch.rand(2048,2048); b=torch.rand(2048,2048)\n"
-            "t0=time.time()\n"
-            "for _ in range(4):\n"
-            "    a @ b\n"
-            "print('COMFTEST-MM4x t=%.2f nthreads=%d' % (time.time()-t0, torch.get_num_threads()))\n");
-        DIAG("torch MM4x (run-G4-2) rc=%d", r);
-#endif
+        // 产品路径(2026-09-05 零探针化): torch import 的正确性/性能判据全部外置到
+        //   ComfyUI 侧自检节点 OHOS_SmokeBench(见 custom_nodes/ohos_smoke + docs/smoke-design.md),
+        //   smoke 走 HTTP 黑盒; 此处仅保留产物环境配置(线程/内核, 生产必需)。
     }
     LOGI("libpython dlopen+init done (torch __1 stack verified)");
 }

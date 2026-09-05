@@ -154,6 +154,23 @@ fetch_comfyui_src() {
     # patch 证据链
     ( cd "$SRC" && git diff --stat | grep -q '+' ) || die "③ patch 后无改动"
     grep -q '_dynamo_disable' "$SRC/$SEED_REL" || die "③ 证据串 _dynamo_disable 未命中（patch 内容不符）"
+    # ③b smoke 自检节点独立 patch(2026-09-05, docs/smoke-design.md): 幂等——节点文件在即 skip
+    #   2026-09-05 补丁含 __init__.py(ComfyUI 目录型节点必带); 老版树(仅 custom_node.py)按产物补齐
+    if ! grep -q 'OHOS_SmokeBench' "$SRC/custom_nodes/ohos_smoke/custom_node.py" 2>/dev/null; then
+        ( cd "$SRC" && git apply "$ROOT/patches/15-ohos-smoke-bench-node.patch" ) || \
+            die "③b smoke 节点 patch 15 应用失败"
+        log "  [OK] smoke 节点(15) applied"
+    elif [ ! -f "$SRC/custom_nodes/ohos_smoke/__init__.py" ] || \
+         ! grep -q 'OUTPUT_NODE = True' "$SRC/custom_nodes/ohos_smoke/custom_node.py" 2>/dev/null; then
+        # 老版 15 已打的树(缺 __init__.py / custom_node.py 无 OUTPUT_NODE): 按文件补齐
+        git apply --include='custom_nodes/ohos_smoke/__init__.py' "$ROOT/patches/15-ohos-smoke-bench-node.patch" 2>/dev/null || true
+        if ! grep -q 'OUTPUT_NODE = True' "$SRC/custom_nodes/ohos_smoke/custom_node.py" 2>/dev/null; then
+            rm -f "$SRC/custom_nodes/ohos_smoke/custom_node.py"
+            ( cd "$SRC" && git apply --include='custom_nodes/ohos_smoke/custom_node.py' "$ROOT/patches/15-ohos-smoke-bench-node.patch" ) || \
+                die "③b smoke 节点 custom_node.py 升级失败"
+        fi
+        log "  [OK] smoke 节点(15) 增量补齐"
+    fi
     stamp_set comfyui-src; log "  [OK] clone $(git -C "$SRC" rev-parse --short HEAD 2>/dev/null) + patch"
 }
 

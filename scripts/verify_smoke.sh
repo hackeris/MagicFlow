@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # verify_smoke.sh —— 一键黑盒验收(防回归, 2026-09-05)。
-# 定位: 把「装机→后端活→BLAS→MM4x→出图」的手工验证流程固化为固定判据。
-#   黑盒 API 层(8189 → ComfyUI 后端), 不依赖 UI 流程; workspace 门/UI 改型不影响本脚本
-#   (将来门落地: 后端由验证入口拉起, 本脚本只负责判)。
+# 定位: 把「装机→后端活→BLAS→MM4x→出图」的验证流程固化为固定判据。
+#   黑盒 API 层(8189 → ComfyUI 后端), 不依赖 UI 流程; workspace 门/UI 改型不影响本脚本。
+#   ⚠ 2026-09-05 零侵入改造(见 docs/smoke-design.md): 判据 A/B 由 ComfyUI 侧自检节点
+#     OHOS_SmokeBench_BLASMM4x(comfyui-src custom_nodes/ohos_smoke)执行, 结果经
+#     /history outputs.ui.json 返回 —— 产品代码(comfy_child.cpp/CMakeLists)无任何测试分支。
 # 判据(固定):
-#   A. COMFTEST-BLAS 含 BLAS_INFO=open          —— BLAS 后端正确
-#   B. COMFTEST-MM4x t 且 < 2.0s                 —— 多线程 GEMM 生效
-#   C. 出图 smoke_workflow_256x2.json: status=success 且 execution < 180s
-#     (seed=42 确定性 → 图片字节数应稳定; 因模型 fp16/fp32 切换会整体变, 不做硬字节断言,
-#      仅 >10KB 且非零; 需要字节级断言时在 --strict 下用基线文件比对)
+#   A/B. smoke bench 节点: blas_ok=True 且 mm4x < 2.0s     —— BLAS 后端+多线程 GEMM
+#   C.   出图 smoke_workflow_256x2.json: status=success 且 execution < 180s
+#     (seed=42 确定性; 因模型 fp16/fp32 切换整体变, 不做硬字节断言: 仅 >10KB 且非零;
+#      需要字节级断言时用 --strict + 基线文件 SMOKE_IMAGE_BASELINE)
 # 用法: bash scripts/verify_smoke.sh [--fast] [--device 192.168.1.8:33363] [--hap <path>] [--strict]
-#   --fast   只验 A/B(不跑出图); --strict 启用图片字节基线比对(基线文件见下);
-#   --device 默认 192.168.1.8:33363; --hap 默认 entry/build/default/outputs/default/entry-default-signed.hap
+#   --fast   只验后端+A/B(不跑出图); --device 默认 192.168.1.8:33363;
+#   --hap 默认 entry/build/default/outputs/default/entry-default-signed.hap
 # 输出: PASS/FAIL 逐项 + 关键数字; 任一 FAIL → exit 1。全量约 4-5 分钟。
 set -euo pipefail
 
@@ -60,18 +61,41 @@ for i in $(seq 1 24); do
 done
 [ "$backend_ok" = 1 ] && ok "后端就绪(8189/system_stats <=240s)" || bad "后端未就绪(240s)"
 
-echo "== [2] 判据 A: BLAS_INFO=open =="
-A=$( { $HDC shell "grep -a 'COMFTEST-BLAS' $DLOG 2>/dev/null" || true; } | tail -1 | tr -d '\r' )
-echo "$A" | grep -q "BLAS_INFO=open" && ok "BLAS_INFO=open" || bad "BLAS_INFO 非 open(完整行: ${A:0:80}...)"
-
-echo "== [3] 判据 B: MM4x < 2.0s =="
-M=$( { $HDC shell "grep -a 'COMFTEST-MM4x t=' $DLOG 2>/dev/null" || true; } | tail -1 | tr -d '\r' )
-T=$(echo "$M" | sed -n 's/.*COMFTEST-MM4x t=\([0-9.]*\).*/\1/p' | tail -1)
-if [ -n "$T" ]; then
-  ok "MM4x=$T s"
-  python3 -c "exit(0 if float('$T') < 2.0 else 1)" && echo "   [PASS] MM4x < 2.0s" || bad "MM4x=$T 超标(≥2.0s)"
+echo "== [2] 判据 A/B: OHOS_SmokeBench(BLAS=open + MM4x<2.0s) =="
+# 2026-09-05 黑盒化: 判据由 ComfyUI 侧自检节点执行(comfyui-src custom_nodes/ohos_smoke),
+#   结果经 history outputs.json 返回(ComfyUI 摊平结构, product 代码零探针, 见 docs/smoke-design.md)。
+BN="$ROOT/scripts/smoke_bench_workflow.json"
+[ -f "$BN" ] || { bad "缺 $BN"; }
+RESP=$(curl -s -m 15 -X POST http://127.0.0.1:8189/prompt -H 'Content-Type: application/json' --data-binary @"$BN" 2>/dev/null || echo "")
+B_PID=$(echo "$RESP" | python3 -c "import sys,json;print(json.load(sys.stdin).get('prompt_id',''))" 2>/dev/null || echo "")
+if [ -z "$B_PID" ]; then bad "bench prompt 未受理"
 else
-  bad "无 MM4x 探针输出"
+  BJ=""
+  for i in $(seq 1 10); do
+    sleep 12
+    R=$(curl -s -m 8 http://127.0.0.1:8189/history/$B_PID 2>/dev/null || echo "")
+    BJ=$(echo "$R" | python3 -c "
+import sys, json
+d = json.load(sys.stdin); h = d.get('$B_PID', {})
+o = h.get('outputs', {}).get('1', {})
+# ComfyUI history 输出摊平(outputs[id] = ui/result 合并, 无 ui 层): 顶层 json; 兼容旧式双路径
+jj = o.get('json') or o.get('ui', {}).get('json', [])
+print(jj[0] if jj else '')
+" 2>/dev/null || echo "")
+    [ -n "$BJ" ] && break
+  done
+  if [ -z "$BJ" ]; then bad "bench 无结果(超时/节点未注册?)"
+  else
+    echo "$BJ" | python3 -c "import sys,json; j=json.load(sys.stdin); print(f'  bench: blas_ok={j[\"blas_ok\"]} mm4x={j[\"mm4x\"]}s nthreads={j[\"nthreads\"]}')" >&2 || true
+    BL=$(echo "$BJ" | python3 -c "import sys,json; j=json.load(sys.stdin); print('OK' if j.get('blas_ok') else 'BAD')" 2>/dev/null || echo "BAD")
+    BX=$(echo "$BJ" | python3 -c "import sys,json; print(json.load(sys.stdin).get('mm4x', 99))" 2>/dev/null || echo 99)
+    [ "$BL" = "OK" ] && ok "BLAS_INFO=open(节点自报)" || bad "BLAS 非 open: $BJ"
+    if [ -n "$BX" ]; then
+      ok "MM4x=$BX s"
+      python3 -c "exit(0 if float('$BX') < 2.0 else 1)" 2>/dev/null && echo "   [PASS] MM4x < 2.0s" || bad "MM4x=$BX 超标"
+    else bad "MM4x 解析失败"
+    fi
+  fi
 fi
 
 echo "== [4] 判据 C: 出图 =="

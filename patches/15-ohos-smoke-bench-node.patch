@@ -1,0 +1,73 @@
+diff --git a/custom_nodes/ohos_smoke/__init__.py b/custom_nodes/ohos_smoke/__init__.py
+new file mode 100644
+index 0000000..0439307
+--- /dev/null
++++ b/custom_nodes/ohos_smoke/__init__.py
+@@ -0,0 +1,6 @@
++"""OHOS smoke 节点包入口 —— ComfyUI 目录型 custom node 约定: 目录必须含 __init__.py
++(nodes.py load_custom_node 目录分支 spec_from_file_location(__init__.py))。"""
++from .custom_node import (
++    NODE_CLASS_MAPPINGS,
++    NODE_DISPLAY_NAME_MAPPINGS,
++)
+diff --git a/custom_nodes/ohos_smoke/custom_node.py b/custom_nodes/ohos_smoke/custom_node.py
+new file mode 100644
+index 0000000..93900c5
+--- /dev/null
++++ b/custom_nodes/ohos_smoke/custom_node.py
+@@ -0,0 +1,55 @@
++"""OHOS 本地推理自检节点 —— smoke 判据 A/B 的执行方(docs/smoke-design.md)。
++产品路径不加载本节点; 仅 make verify 提交的 smoke workflow 触发。
++判据: BLAS_INFO=open + 2048²×4 MM 计时(<2.0s) → history outputs ui.json。
++"""
++import json
++import os
++import time
++
++import torch
++
++
++class OHOS_SmokeBench_BLASMM4x:
++    @classmethod
++    def INPUT_TYPES(s):
++        return {"required": {}}
++
++    RETURN_TYPES = ("STRING",)
++    RETURN_NAMES = ("json",)
++    FUNCTION = "run"
++    CATEGORY = "ohos/smoke"
++    # ComfyUI validate_prompt(execution.py:1165): 无 OUTPUT_NODE 的图为 "prompt_no_outputs"
++    # 拒收 —— 自检节点须自证为输出节点(否则 bench workflow 无法提交/执行)。
++    OUTPUT_NODE = True
++
++    def run(self):
++        cfg = [l for l in torch.__config__.show().splitlines()
++               if "BLAS" in l or "OPENBLAS" in l.upper()]
++        torch.set_num_threads(12)
++        a = torch.rand(2048, 2048)
++        b = torch.rand(2048, 2048)
++        t0 = time.time()
++        for _ in range(4):
++            a @ b
++        t = time.time() - t0
++        cfg_txt = " | ".join(cfg)
++        res = {
++            "blas_ok": "BLAS_INFO=open" in cfg_txt,
++            "blas_cfg": cfg_txt,
++            "mm4x": round(t, 3),
++            "nthreads": int(torch.get_num_threads()),
++        }
++        # 留档(供 hdc shell 兜底读取; 主信道 = history outputs.ui.json)
++        root = os.environ.get("PYTHONHOME", "")
++        if root and os.path.isdir(root):
++            try:
++                with open(os.path.join(root, "smoke_result.json"), "w") as f:
++                    json.dump(res, f)
++            except OSError:
++                pass
++        js = json.dumps(res)
++        return {"ui": {"json": [js]}, "result": (js,)}
++
++
++NODE_CLASS_MAPPINGS = {"OHOS_SmokeBench_BLASMM4x": OHOS_SmokeBench_BLASMM4x}
++NODE_DISPLAY_NAME_MAPPINGS = {"OHOS_SmokeBench_BLASMM4x": "OHOS Smoke Bench (BLAS/MM4x)"}

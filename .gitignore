@@ -25,6 +25,8 @@
 .superpowers
 
 # ── 复现链产物（不入库; 由 fetch/collect/make 重建并做锚校验）──
+# patch 生成用临时工作树（带 .git; 非交付物, 生成 patch 的正规源 = externals/comfyui-src 的 git 树）
+/patches/working/
 /externals
 /entry/src/main/cpp/prebuilt
 /entry/src/main/resources/rawfile/python312.zip

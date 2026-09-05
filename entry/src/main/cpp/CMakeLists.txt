@@ -184,26 +184,10 @@ set(TK_LIB "")
 import_ext_so("tokenizers.abi3.so" TK_LIB)
 
 # ComfyUI 后端子进程（NCP）：入口 extern "C" void Main(NativeChildProcess_Args)。
-# G4 探针(2026-09-04, 临时): USE_PROBE_MAIN=1 → 用最小 probe_main(零 torch/py 库链)
-#   二值化 "NCP/系统侧罪魁" vs "comfy_child 库链罪魁"; 测得后改回 0 并删 probe_main.cpp。
-#   【已定谳 2026-09-05】: 0 未定义符号差(完整 Fortran-LAPACK + gfortran stub + mbind no-op)
-#   → 真机 PROBE-DLOK ✓。探针使命完成, 恢复正式 comfy_child。
-set(USE_PROBE_MAIN 0)
-if(USE_PROBE_MAIN)
-    add_library(comfy_child SHARED
-        child/probe_main.cpp)
-    target_compile_options(comfy_child PRIVATE -funwind-tables -fno-omit-frame-pointer)
-    target_link_options(comfy_child PRIVATE -nostdlib++)
-    target_link_libraries(comfy_child PUBLIC
-        libhilog_ndk.z.so libchild_process.so libdl.so
-        libcxx1 libcxxabi1 libunwind1
-        # ── probe+torch 分组二分(BL3b): libc10 保留; libtorch_cpu 不再 NEEDED,
-        #    由 probe_main 活体 dlopen 拿 dlerror ──
-        libc10)
-    set(PROBE_BRANCH 1)
-else()
-    add_library(comfy_child SHARED
-        child/comfy_child.cpp)
+# G4 探针(2026-09-04) 使命早已完成(PROBE-DLOK 定谳); 2026-09-05 双分支拆除(USE_PROBE_MAIN/
+#   PROBE_BRANCH 残根), 产品单分支; 探针/自检逻辑全部外置(见 docs/smoke-design.md)。
+add_library(comfy_child SHARED
+    child/comfy_child.cpp)
 # 诊断 PyInit__C 卡死栈：信号 handler 里 _Unwind_Backtrace 需 .eh_frame 才能回溯。
 # 默认 clang 用 -fomit-frame-pointer 且 hvigor DoNativeStrip 后无 .eh_frame => unwinder 返 0 帧。
 # 显式开 -funwind-tables + -fno-omit-frame-pointer 强制生成 .eh_frame（仅诊断用，不影响功能）。
@@ -271,4 +255,3 @@ target_link_libraries(comfy_child PUBLIC
     ${TK_LIB}          # run82 tokenizers.abi3.so：同上
     "-Wl,--no-as-needed" "-L${PRE}/torch" "-L${PRE}/dynload" "-L${PRE}/numpy" "-L${PRE}/scipy" "-L${PRE}"
     ${_NEEDED_SHORT})  # NEEDED 树=短名（loader 全局符号组）; 见上方机制 v2 注释
-endif()
