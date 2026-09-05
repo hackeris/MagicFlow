@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # verify_smoke.sh —— 一键黑盒验收(防回归, 2026-09-05)。
 # 定位: 把「装机→后端活→BLAS→MM4x→出图」的验证流程固化为固定判据。
-#   黑盒 API 层(8189 → ComfyUI 后端), 不依赖 UI 流程; workspace 门/UI 改型不影响本脚本。
+#   黑盒 API 层(8189 → ComfyUI 后端), 不依赖 UI 流程; 单入口启动/UI 改型不影响本脚本。
 #   ⚠ 2026-09-05 零侵入改造(见 docs/smoke-design.md): 判据 A/B 由 ComfyUI 侧自检节点
 #     OHOS_SmokeBench_BLASMM4x(comfyui-src custom_nodes/ohos_smoke)执行, 结果经
 #     /history outputs.ui.json 返回 —— 产品代码(comfy_child.cpp/CMakeLists)无任何测试分支。
@@ -47,11 +47,12 @@ $HDC install -r "$HAP" 2>&1 | tail -1 | grep -qE "AppMod finish|success" || bad 
 $HDC shell "aa force-stop app.hackeris.hium" >/dev/null 2>&1 || true
 sleep 2
 $HDC shell "aa start -a EntryAbility -b app.hackeris.hium" >/dev/null 2>&1
-echo "  已启动, 等门户 UI 稳定..."
-sleep 20   # 门户首帧实测 ~15-20s(2026-09-05)
+echo "  已启动, 等首页 UI 稳定..."
+sleep 20   # 首页首帧实测 ~15-20s(2026-09-05)
 
-# ── W1 门户驱导(2026-09-05, docs/workspace-design.md)───────────────────────
-#   产品化=零自动启动(W1 环境门): 后端由「用户手势」触发 —— verify 以 UI 自动化执行同一手势。
+# ── 门户驱导(2026-09-05 单入口化, docs/workspace-design.md)─────────────────
+#   产品化=零自动启动: 后端由「用户手势」触发 —— verify 以 UI 自动化执行同一手势
+#   (点首页「启动 ComfyUI」; W1 环境管理/多步新建链已撤出设备形态)。
 #   工具: 设备无 input 命令 → uitest uiInput(click/inputText/keyEvent);
 #   定位: uitest dumpLayout 动态取文本节点 bounds 中心(抗布局/文案微调);
 #   硬化: 每次注入前 aa start 拉回 App 前台(防用户正在用别的应用时误触, 2026-09-05 实判)。
@@ -82,65 +83,21 @@ PY
 }
 ui_in() { $HDC shell "uitest uiInput $*" >/dev/null 2>&1; }
 
-# 门户驱导: 打开已有环境(第一个卡片)或新建 smoke-auto; 返回 0=已注入, 1=失败。
-#   坐标全部动态取自 uitest dumpLayout(文本/hint 节点中心), 不硬编码(抗布局微调)。
+# 门户驱导(单入口, 2026-09-05): 点首页「启动 ComfyUI」按钮; 返回 0=已注入, 1=失败。
+#   坐标全部动态取自 uitest dumpLayout(文本节点中心), 不硬编码(抗布局微调)。
 portal_enter() {
   # 前置: 把 App 拉回前台(硬化) —— 防用户正用别的应用时误触(2026-09-05 实判)
   $HDC shell "aa start -a EntryAbility -b app.hackeris.hium" >/dev/null 2>&1
   sleep 5
-  local TITLE CARD NB IN OKB
-  TITLE=$(node_center "我的环境")
-  if [ -n "$TITLE" ]; then
-    # 有环境: 取「我的环境」标题下方第一个文本节点 = 卡片名(第一项)
-    $HDC shell uitest dumpLayout -p /data/local/tmp/ul.xml >/dev/null 2>&1
-    $HDC file recv /data/local/tmp/ul.xml /tmp/smoke_ul.xml >/dev/null 2>&1
-    CARD=$(python3 - "$TITLE" <<'PY'
-import json, re, sys
-d = json.load(open('/tmp/smoke_ul.xml', encoding='utf-8'))
-ny = int(sys.argv[1].split()[1])
-res = []
-def walk(n):
-    a = n.get('attributes', {})
-    t = (a.get('text') or a.get('originalText') or '').strip()
-    m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', a.get('bounds', ''))
-    if m:
-        cy = (int(m.group(2)) + int(m.group(4))) // 2
-        if not res and t and cy > ny + 40:      # 标题下方第一处文本 = 卡片名
-            res.append(f"{(int(m.group(1)) + int(m.group(3))) // 2} {cy}")
-            return True
-    for c in n.get('children', []):
-        if walk(c):
-            return True
-    return False
-walk(d)
-print(res[0] if res else '')
-PY
-)
-    if [ -n "$CARD" ]; then
-      echo "  portal: 打开已有环境 @($CARD)"
-      ui_in click $CARD
-      return 0
-    fi
-  fi
-  # 空态 → 新建链: 新建环境 → 输入框(placeholder) → smoke-auto → 创建
-  NB=$(node_center "新建环境")
-  [ -z "$NB" ] && { echo "  portal: 门户未出现(新建环境按钮缺失)"; return 1; }
+  local NB
+  NB=$(node_center "启动 ComfyUI")
+  [ -z "$NB" ] && { echo "  portal: 首页未出现(启动按钮缺失)"; return 1; }
   ui_in click $NB
-  sleep 4
-  IN=$(node_center "环境名称")
-  [ -z "$IN" ] && { echo "  portal: 新建对话框未出现(输入框缺失)"; return 1; }
-  ui_in click $IN
-  sleep 2
-  ui_in text smoke-auto
-  sleep 2
-  OKB=$(node_center "创建")
-  [ -z "$OKB" ] && { echo "  portal: 创建按钮缺失"; return 1; }
-  ui_in click $OKB
-  echo "  portal: 新建环境 smoke-auto"
+  echo "  portal: 点击『启动 ComfyUI』"
   return 0
 }
 
-echo "== [1b] 门户驱导(打开或新建环境) =="
+echo "== [1b] 门户驱导(单入口: 点启动) =="
 portal_enter && echo "  已注入用户手势, 等后端就绪..."
 
 # fport(宿主 8189 → 设备 8188)
