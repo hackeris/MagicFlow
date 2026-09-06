@@ -71,4 +71,5 @@ rustc 1.98.0 + `aarch64-unknown-linux-ohos` / node 25(`scripts/build_frontend.sh
 
 - 唯一权威仓库 = 本目录(git + 无大二进制,全链可复现);变更/验证一律在本目录进行。
 - 详细设计见 `docs/`: DESIGN.md(研究史+pin)、BUILD.md(复现链)、smoke-design.md、
-  model-download.md、workspace-design.md、frontend-fork-plan.md、local-inference-torch-parallel.md。
+  model-download.md、workspace-design.md、frontend-fork-plan.md、local-inference-torch-parallel.md、
+  torch-backend-cann.md(端侧 NPU 后端方案分析,未立项)。
