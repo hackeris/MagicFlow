@@ -187,7 +187,8 @@ import_ext_so("tokenizers.abi3.so" TK_LIB)
 # G4 探针(2026-09-04) 使命早已完成(PROBE-DLOK 定谳); 2026-09-05 双分支拆除(USE_PROBE_MAIN/
 #   PROBE_BRANCH 残根), 产品单分支; 探针/自检逻辑全部外置(见 docs/smoke-design.md)。
 add_library(comfy_child SHARED
-    child/comfy_child.cpp)
+    child/comfy_child.cpp
+    child/npu_probe.cpp)   # P0 NNRt 探针(诊断模式, entryParams 含 npu-probe 才执行)
 # 诊断 PyInit__C 卡死栈：信号 handler 里 _Unwind_Backtrace 需 .eh_frame 才能回溯。
 # 默认 clang 用 -fomit-frame-pointer 且 hvigor DoNativeStrip 后无 .eh_frame => unwinder 返 0 帧。
 # 显式开 -funwind-tables + -fno-omit-frame-pointer 强制生成 .eh_frame（仅诊断用，不影响功能）。

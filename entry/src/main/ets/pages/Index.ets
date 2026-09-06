@@ -1,10 +1,12 @@
-import { startComfyChild } from 'libentry.so';
+import { startComfyChild, npuEnumerate } from 'libentry.so';
 import { ensureStdlib } from '../utils/Stdlib';
 import { ensureModels, getModelsRoot, modelPath } from '../utils/ModelsDir';
 import { fileIo } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { webview } from '@kit.ArkWeb';
 import { http } from '@kit.NetworkKit';
+// P0 对照探针(2026-09-06, 临时): MindSporeLite Kit 的 ArkTS 侧 NNRt 设备可见性
+import { mindSporeLite } from '@kit.MindSporeLiteKit';
 
 const DOMAIN = 0xD001;
 const TAG = 'ComfyUI';
@@ -107,6 +109,34 @@ struct Index {
     if (this.active) {
       return;
     }
+    // P0 对照探针(2026-09-06 临时, 验证后删): NCP 子进程 GetAllDevicesID count=0,
+    //   对照 UIAbility 进程经 MindSporeLite Kit 是否可见(区分「子进程限制」vs「固件未开放」)
+    const arkLog = `${getContext(this).filesDir}/npu-probe-ark.log`;
+    const arkWrite = (msg: string): void => {
+      try {
+        const fd = fileIo.openSync(arkLog, fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC
+          | fileIo.OpenMode.WRITE_ONLY);
+        fileIo.writeSync(fd.fd, msg);
+        fileIo.closeSync(fd);
+      } catch (_) { /* ignore */ }
+    };
+    // ① MindSporeLite Kit(ArkTS 官方链)设备可见性
+    try {
+      const ds = mindSporeLite.getAllNNRTDeviceDescriptions();
+      let s = `ark npu-probe: count=${ds.length}\n`;
+      for (const d of ds) {
+        s += `  dev name=${d.deviceName()} type=${d.deviceType()}\n`;
+      }
+      // ② 父进程 C API(与子进程同库同调用方式)对照
+      try {
+        s += `napi npu-p1: ${npuEnumerate()}\n`;
+      } catch (e2) {
+        s += `napi npu-p1 EX: ${JSON.stringify(e2)}\n`;
+      }
+      arkWrite(s);
+    } catch (e) {
+      arkWrite(`ark npu-probe EX: ${JSON.stringify(e)}`);
+    }
     this.active = true;
     this.phase = 1;
     this.elapsed = 0;
@@ -147,6 +177,8 @@ struct Index {
       await ensureModels(actx, pyroot);
       this.phase = 2;
       this.status = '启动后端子进程…';
+      // 诊断口(默认关闭): entryParams 补 "|npu-probe" 可让子进程跑 NNRt 探针
+      //   (写入 <pyroot>/npu-probe.log; 探针含 6×5s 重试, 平时绝不能开 —— P0 实证)
       const entryParams = `phase0|127.0.0.1|8188|--cpu|pyroot=${pyroot}`;
       this.pid = startComfyChild(entryParams);
       this.phase = 3;
