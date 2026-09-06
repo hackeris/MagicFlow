@@ -1,4 +1,4 @@
-import { startComfyChild, npuEnumerate } from 'libentry.so';
+import { startComfyChild, npuEnumerate, npuRunAddGraph, npuRunOfflineModelBuffer } from 'libentry.so';
 import { ensureStdlib } from '../utils/Stdlib';
 import { ensureModels, getModelsRoot, modelPath } from '../utils/ModelsDir';
 import { fileIo } from '@kit.CoreFileKit';
@@ -105,12 +105,10 @@ struct Index {
   steps: string[] = ['准备运行环境', '启动后端子进程', '装载核心组件', '后端就绪'];
   narrs: string[] = ['初始化运行时组件…', '注册模型与扩展…', '准备推理引擎…', '联机后端检查…'];
 
-  startApp(): void {
-    if (this.active) {
-      return;
-    }
-    // P0 对照探针(2026-09-06 临时, 验证后删): NCP 子进程 GetAllDevicesID count=0,
-    //   对照 UIAbility 进程经 MindSporeLite Kit 是否可见(区分「子进程限制」vs「固件未开放」)
+  // P0 自动探针(2026-09-06, 用户要求「启动即探」; 验证后删): 页面出现即执行, 不再
+  //   挂在「启动」按钮; 探针只做枚举/构图执行, 不启动后端、不动网络 —— 零自动启动语义不受影响。
+  //   结果: filesDir/npu-probe-ark.log(TRUNC 覆盖写, hdc 只读可拉)。
+  aboutToAppear(): void {
     const arkLog = `${getContext(this).filesDir}/npu-probe-ark.log`;
     const arkWrite = (msg: string): void => {
       try {
@@ -133,9 +131,41 @@ struct Index {
       } catch (e2) {
         s += `napi npu-p1 EX: ${JSON.stringify(e2)}\n`;
       }
+      // ②' 官方 Add 单算子构图→编译→执行链(2026-09-06 HAP 内形态; 结果 TRUNC 覆盖写)
+      //   2026-09-06 源码定谳: Build 必须先 SetCache(缓存目录 App 可写) → 传 filesDir/nncache
+      try {
+        const nnCacheDir = `${getContext(this).filesDir}/nncache`;
+        fileIo.mkdirSync(nnCacheDir, true);
+        s += `napi npu-run-add:\n${npuRunAddGraph(nnCacheDir)}\n`;
+        // ③ 离线模型执行(Buffer 版, 2026-09-07): rawfile → ConstructWithOfflineModelBuffer,
+        //   免拷贝; 异步执行完成后回填 npu-offline.log(TEST_DONE 通道)。
+        const offlLog = `${getContext(this).filesDir}/npu-offline.log`;
+        const offlWrite = (msg: string): void => {
+          try {
+            const fd = fileIo.openSync(offlLog, fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC
+              | fileIo.OpenMode.WRITE_ONLY);
+            fileIo.writeSync(fd.fd, msg);
+            fileIo.closeSync(fd);
+          } catch (_) { /* ignore */ }
+        };
+        getContext(this).resourceManager.getRawFileContent('custom_graph.omc').then((buf: Uint8Array) => {
+          const r: string = npuRunOfflineModelBuffer(buf, nnCacheDir);
+          offlWrite(`napi npu-offline-buf:\n${r}\n`);
+        }).catch((e5: Error) => {
+          offlWrite(`napi npu-offline-buf: rawfile-missing EX ${JSON.stringify(e5)}\n`);
+        });
+      } catch (e3) {
+        s += `napi npu-run-add EX: ${JSON.stringify(e3)}\n`;
+      }
       arkWrite(s);
     } catch (e) {
       arkWrite(`ark npu-probe EX: ${JSON.stringify(e)}`);
+    }
+  }
+
+  startApp(): void {
+    if (this.active) {
+      return;
     }
     this.active = true;
     this.phase = 1;
@@ -509,7 +539,7 @@ struct Index {
                 .margin({ top: 8 })
               Row().width('100%').height(1).backgroundColor('#1AFFFFFF')
                 .margin({ top: 14, bottom: 12 })
-              Text('模型目录: Download/app.hackeris.hium/models')
+              Text('模型目录: Download/app.fuqidian.magicflow/models')
                 .fontSize(11).fontColor('#8A97BF')
             }
             .width('80%')

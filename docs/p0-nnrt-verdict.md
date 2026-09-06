@@ -1,5 +1,9 @@
 # P0 实证报告:端侧 NNRt / Ascend C 链路(2026-09-06)
 
+> ⚠️ 2026-09-07 更新:本页判据矩阵之外的离线模型链已有**定谳报告**:
+> [p0-nnrt-offline-verdict.md](p0-nnrt-offline-verdict.md) —— **offline Build rc=1 = 系统库
+> 显式拒绝离线模型(开源版字符串实锤),App 域跑 Custom 当前系统不可达**。
+>
 > 目标:装 DDK → 真机跑通官方 AddCustom 样例(9030/9020 平板, 192.168.1.8:33363)。
 > **判决:目标未完全达成,但结论性证据全部拿到 —— 三条独立事实把「端侧 NPU 加速」
 > 的可行性面精确勾勒出来了。本页是证据记录 + 下一步决策点。**
@@ -23,11 +27,13 @@
 | DDK 5.0.2 安装/msopgen | ✅ | install.sh 成功;`msopgen gen -c ai_core-kirin9020 -f ONNX` 生成算子工程 |
 | Ascend C 算子编译 | ✅ | `./build.sh` → "Build and install success"; 产物 `tools_ascendc/custom_op/kirin9020/lib/libcustom_op.so` + `aic-kirin9020-ops-info.json`(同步进 tools_omg/master 配置) |
 | CPU/仿真调试 ascendebug | ❌(兼容问题) | gcc15 下 `GET_TILING_DATA` 未声明(依赖工具链内部模板宏, 非必要路径, 跳过) |
-| 端侧模型转换 omg→.omc | ⚠ 本地链通至平台库缺口 | **ir_model_compile 路线全通**(python3.10 环境 + cp1251 修复 + gcc15 兼容三修后, kernel 编译通过), 最终仅差 **平台内核库(FMK_CL/librl_search.so/libai_npucore_generated.so)**, 归属 kirin9020 平台插件包(官方登录下载, 3 轮直链搜索无果) |
+| 端侧模型转换 ir_model_compile→.omc | 🔄 601 全链推进中(2026-09-07) | 6.0.1.0 正式版两件套已下载(SHA 双命中), `kirin9030-plugin` 内含 **libai_npucore_ascendc_kernel.so(59MB)** 与 27 内置 ascendc opinfo(611 next 缺的全补上)。已完成: 601 环境安装; AddCustom-gen9030 编译成功(**Build and install success**); **ascendc_config/npu_ascendc_opinfo 部署到 `tools_omg/master/lib64/config/`(601 无此目录, 自建)+ AddCustom 注入 opinfo(28 键)**。当前唯一阻塞: TE fusion `Launch dynamic-handle failed`(tefusion→PythonApiCall 需 **libpython3.10.so 动态库**; py310 静态版无 .so → **py310sh enable-shared 编译中**)。复跑驱动: `build/ddk/omc611/work/src/build.sh`(SOC=kirin9030) |
 | NNRt 设备可见性(UIAbility 进程, C API) | ✅ **count=1 HIAI_F type=3** | NAPI `npuEnumerate`(父进程同库同调用方式)回显 |
+| NNRt 构图→编译→执行(UIAbility 进程) | ✅ **真机 PASS(9030/MOR-M1)** | HAP 内 `npuRunAddGraph`(官方 Add 单算子样例): 构图/SetCache/SetDevice/Perf/Pri/Fp16/Build/**RunSync 全 rc=0, 输出 [0..22]=z=x+y 与期望全对 → **NNRT-ADD-GRAPH: PASS**。两个关键修复: ①**Build 必须先 `OH_NNCompilation_SetCache`**(nncompiler.cpp 源码实证: 未 SetCache → realpath("")→ INVALID_PARAMETER(rc=2);官方样例带 SetCache 非可选) ②设备选择须**优先真实硬件名**(9030 列表: `NPU_ohos.boot.hardware.KirinXE90_v2_0`(真实) + `HIAI_F`(虚拟通用入口, 9020/9030 同 id 8987859593747354028);选 HIAI_F 则 rtSetDevice fail → rc=1)。**9020 当前无 NPU_ 设备(仅 HIAI_F)+ hiaiserver 全局 rtSetDevice fail(errno=2) = 9020 单机 NPU 驱动未就绪, 非代码问题** |
+| ⚠ 事故教训 | GetAvailableOperations | 按猜测签名调用 `OH_NNModel_GetAvailableOperations`(SDK 头无此函数)→ 真机 SIGSEGV, 已移除 |
 | NNRt 设备可见性(UIAbility, ArkTS MindSporeLite Kit) | ✅ **count=1 HIAI_F** | `mindSporeLite.getAllNNRTDeviceDescriptions()` |
 | NNRt 设备可见性(**NCP 子进程**, C API) | ❌ **count=0** | 子进程内置 npu_probe(dlopen 同库)6×5s 重试恒 0 |
-| 系统库导出面 | 已固定 | nm -D(设备库): 仅**离线模型路径**(OH_NNCompilation_ConstructWithOfflineModel{File,Buffer}/Build/RunSync + NN_Tensor 体系);**无 OH_NNModel_*(动态构图)、无 AllocateInputMemory(Memory 老接口)** |
+| 系统库导出面 | ⚠ 修正(2026-09-06 HAP 内探针) | 旧结论「无 OH_NNModel_*」**系旧探针 dlsym 老接口名 `OH_NNModel_AddTensor` 所致**; HAP 内(UIAbility 进程)用 API 24 新名全链实测 rc=0: `OH_NNModel_{Construct,AddTensorToModel,SetTensorType,SetTensorData,AddOperation,SpecifyInputsAndOutputs,Finish,Destroy}` + NN_Tensor 体系 == **动态构图接口在设备可用**; 唯一当前失败 = `OH_NNCompilation_Build` rc=2(设备端 rtSetDevice fail) |
 | 系统内 .omc 模型 | 未找到 | find /system /vendor /etc(无输出, 模型在私有分区) |
 | 零自动启动 | ✅ 未破坏 | 恢复产品态后 ps=0 |
 

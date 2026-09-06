@@ -17,7 +17,8 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/prebuilt/include)
 
 # 父进程（ArkUI）：NAPI 拉起 NCP 子进程
 add_library(entry SHARED
-    napi_init.cpp)
+    napi_init.cpp
+    nnrt_run.cpp)   # P0 执行探针(2026-09-06): 官方 Add 单算子构图→执行, dlopen 式
 target_link_libraries(entry PUBLIC
     libace_napi.z.so
     libhilog_ndk.z.so
