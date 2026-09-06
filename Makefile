@@ -9,8 +9,8 @@ export NATIVE_ARCH
 TOOL_HOME ?= /apps/harmony
 OHOS_SDK ?= $(TOOL_HOME)/sdk/default/openharmony
 EXT_DIR ?= $(CURDIR)/externals
-BUNDLE = app.hackeris.hium
-# aarch64 设备要求签名 → 用 signed.hap（debug 签名材料 .ohos/, gitignored,见 README「签名材料」）
+BUNDLE = app.fuqidian.magicflow
+# aarch64 设备要求签名 → 用 signed.hap（debug 签名材料共享 ~/.ohos/config,见 README「签名材料」）
 HAP = entry/build/default/outputs/default/entry-default-signed.hap
 
 .PHONY: all hap check fetch extract stage zip rust prebuilt install deploy verify verify-device log clean clean-all help
@@ -20,7 +20,7 @@ all: hap
 # ── 前置检查：SDK / 签名材料（构建 HAP 的硬前提）──
 check:
 	@[ -x "$(OHOS_SDK)/toolchains/hdc" ] || { echo "[CHECK] 缺 OHOS SDK @ $(OHOS_SDK)（TOOL_HOME=/apps/harmony?）"; exit 1; }
-	@ls .ohos/*.p12 >/dev/null 2>&1 || { echo "[CHECK] 缺签名材料 .ohos/*.p12（DevEco 生成,见 README）"; exit 1; }
+	@ls /data/share/hap/.ohos/config/*MagicFlow*.p12 >/dev/null 2>&1 || { echo "[CHECK] 缺签名材料 /data/share/hap/.ohos/config/*MagicFlow*.p12（DevEco 自动签名生成,由 build-profile.json5 引用）"; exit 1; }
 
 # ── ① 外部输入（下载+sha 校验,幂等; 断网可用 --offline 复用本地副本）──
 fetch:

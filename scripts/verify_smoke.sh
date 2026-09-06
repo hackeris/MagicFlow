@@ -30,7 +30,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 HDC="hdc -t $DEVICE"
-DLOG=/data/app/el2/100/base/app.hackeris.hium/haps/entry/files/pyroot/diag.log
+DLOG=/data/app/el2/100/base/app.fuqidian.magicflow/haps/entry/files/pyroot/diag.log
 
 PASSES=0; FAILS=""
 ok()   { echo "  [PASS] $*"; PASSES=$((PASSES+1)); }
@@ -44,9 +44,9 @@ echo "  device=$DEVICE hap=$(basename "$HAP")"
 echo "== [1] 装机 + 启动 =="
 # 保数据安装(install -r 升级语义): 模型/沙箱不丢, smoke 不触发重下(约 4-5 分钟保活)
 $HDC install -r "$HAP" 2>&1 | tail -1 | grep -qE "AppMod finish|success" || bad "install -r 输出异常: $($HDC install "$HAP" 2>&1 | tail -1)"
-$HDC shell "aa force-stop app.hackeris.hium" >/dev/null 2>&1 || true
+$HDC shell "aa force-stop app.fuqidian.magicflow" >/dev/null 2>&1 || true
 sleep 2
-$HDC shell "aa start -a EntryAbility -b app.hackeris.hium" >/dev/null 2>&1
+$HDC shell "aa start -a EntryAbility -b app.fuqidian.magicflow" >/dev/null 2>&1
 echo "  已启动, 等首页 UI 稳定..."
 sleep 20   # 首页首帧实测 ~15-20s(2026-09-05)
 
@@ -87,7 +87,7 @@ ui_in() { $HDC shell "uitest uiInput $*" >/dev/null 2>&1; }
 #   坐标全部动态取自 uitest dumpLayout(文本节点中心), 不硬编码(抗布局微调)。
 portal_enter() {
   # 前置: 把 App 拉回前台(硬化) —— 防用户正用别的应用时误触(2026-09-05 实判)
-  $HDC shell "aa start -a EntryAbility -b app.hackeris.hium" >/dev/null 2>&1
+  $HDC shell "aa start -a EntryAbility -b app.fuqidian.magicflow" >/dev/null 2>&1
   sleep 5
   local NB
   NB=$(node_center "启动 梦幻之流")
@@ -160,7 +160,7 @@ echo "== [2.5] Q2 模型下载端到端(可选, MODEL_DL=1) =="
 #   ⚠ 路径视图: 必须用 hdc 卷视图 /storage/media/100/...(shell 可见); `/storage/
 #   Users/currentUser/...` 仅 App 进程视图(w6 实测 shell No such file → 判据假 FAIL)。
 if [ "${MODEL_DL:-0}" = 1 ]; then
-  MEDIA_CKP="/storage/media/100/local/files/Docs/Download/app.hackeris.hium/models/checkpoints"
+  MEDIA_CKP="/storage/media/100/local/files/Docs/Download/app.fuqidian.magicflow/models/checkpoints"
   MB=$(hdc -t "$DEVICE" shell "wc -c < '$MEDIA_CKP/sd_turbo.safetensors' 2>/dev/null" 2>/dev/null | grep -o '[0-9]\+' | head -1)
   if [ -n "$MB" ] && [ "$MB" -gt 1000000000 ]; then
     ok "Q2 目标已具备(媒体区完整模型 ${MB}B)"

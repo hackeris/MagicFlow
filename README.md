@@ -15,7 +15,7 @@ Index.ets(单入口)  ──OH_Ability_StartNativeChildProcess──▶  comfy_c
 
 - 后端只在用户点「启动」后运行;退出 App 即停止(零常驻)。
 - 一切 `.so` 只经 HAP `libs/<abi>/` 经 meta_path Finder(`dlopen` + `PyInit_*`)加载(禁 `patchelf`/绝对路径)。
-- 模型已可下载到系统可见目录 `Download/app.hackeris.hium/models/`(前端模型库一键下载),也可手动放入。
+- 模型已可下载到系统可见目录 `Download/app.fuqidian.magicflow/models/`(前端模型库一键下载),也可手动放入。
 
 ## 2. 复现链(空机器 → 真机验证)
 
@@ -55,9 +55,6 @@ make verify     # ⑨ 一键黑盒验收: 装机→门户驱导→后端→BLAS/
 
 CLT 6.1.1.280 / hvigor 6.24.2(官方原版)/ SDK 6.1.1 (API24) / hdc 3.2.0d /
 rustc 1.98.0 + `aarch64-unknown-linux-ohos` / node 25(`scripts/build_frontend.sh` 自建前端 dist)。
-
-签名材料:真机拒绝 unsigned HAP;`.ohos/` 四件套为 debug 签名(bundleName `app.hackeris.hium`)。
-过期时报 `signature` 错误 → DevEco Studio 自动签名再生(保持 bundleName 一致)。
 
 ## 5. 已知缺口
 

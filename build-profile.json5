@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": ".ohos/default_Harmiu_9jA2xWXbYkeg9105GOMwLIus1sO047izM-GL5QtXeZE=.cer",
+          "certpath": "/data/share/hap/.ohos/config/default_MagicFlow_5289PJwGwGFH7UxFmVgs5-9t3tilQh9gdScLczH-hAQ=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001B86D3D1FA6CD6DEE2B083B4F932F6CD9AF54296CF064EF645D77DC005272983438F536060619314",
-          "profile": ".ohos/default_Harmiu_9jA2xWXbYkeg9105GOMwLIus1sO047izM-GL5QtXeZE=.p7b",
+          "keyPassword": "0000001B34BD6BA522DAE773A1AF12464A5DA027A1C3668B16E2A8053B56B9DA100424B3B7F4D03860B11C",
+          "profile": "/data/share/hap/.ohos/config/default_MagicFlow_5289PJwGwGFH7UxFmVgs5-9t3tilQh9gdScLczH-hAQ=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": ".ohos/default_Harmiu_9jA2xWXbYkeg9105GOMwLIus1sO047izM-GL5QtXeZE=.p12",
-          "storePassword": "0000001BC232DC633C7DCADE7C1A04C0BCB58F50E05792B6E007A87A411DF3BCBFCFD0558E78C124930232"
+          "storeFile": "/data/share/hap/.ohos/config/default_MagicFlow_5289PJwGwGFH7UxFmVgs5-9t3tilQh9gdScLczH-hAQ=.p12",
+          "storePassword": "0000001B9031A8D3C8E938D6FEECB266FFE0A67E19443A9463F28CDC5386668C21263D5664AB5C64055EDD"
         }
       }
     ],

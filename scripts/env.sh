@@ -29,7 +29,7 @@ export BUILD_DIR
 # 测试设备（hdc 目标, 用实际连接设备; HDC_TARGET 可覆盖, 如 HDC_TARGET=192.168.1.9:5555）
 export HDC_TARGET="${HDC_TARGET:-192.168.1.8:33363}"
 export HDC="$OHOS_SDK/toolchains/hdc -t $HDC_TARGET"
-export BUNDLE="app.hackeris.hium"
+export BUNDLE="app.fuqidian.magicflow"
 
 # 编译并行
 if [ -z "${JOBS:-}" ]; then JOBS="$(nproc 2>/dev/null || echo 4)"; fi
