@@ -413,56 +413,111 @@ struct Index {
           .width('100%')
           .height('100%')
           .alignItems(HorizontalAlign.Center)
-          .backgroundColor(0x101418)
+          // 2026-09-06: 与首页同系深空渐变(原 0x101418 纯黑) — 首页→进度页转场不跳色
+          .linearGradient({ angle: 165, colors: [[0x0A0E1E, 0.0], [0x1A2154, 0.55], [0x3B2A78, 1.0]] })
         }
       } else {
-        // ── 单入口首页(2026-09-05): 固定环境卡 +「启动 梦幻之流」; 无环境管理 ──
-        Column() {
-          Text('梦幻之流')
-            .fontSize(34)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(0x123b6d)
-            .margin({ top: 80, bottom: 8 })
-          Text('MagicFlow · HarmonyOS 本地 AI 推理')
-            .fontSize(14)
-            .fontColor(0x888888)
-          Column() {
-            Text('梦幻之流 环境')
-              .fontSize(20)
-              .fontWeight(FontWeight.Medium)
-            Text('SD-Turbo 256×256 · 低内存形态')
-              .fontSize(14)
-              .fontColor(0x999999)
-              .margin({ top: 6 })
-            Text('模型目录: Download/app.hackeris.hium/models')
-              .fontSize(12)
-              .fontColor(0xAAAAAA)
-              .margin({ top: 6 })
-          }
-          .width('78%')
-          .padding({ left: 20, right: 20, top: 22, bottom: 22 })
-          .borderRadius(12)
-          .backgroundColor(0xF2F6FB)
-          .alignItems(HorizontalAlign.Start)
-          .margin({ top: 36 })
+        // ── 单入口首页(2026-09-05 初版; 2026-09-06 美化: 深空梦幻渐变) ──
+        //   视觉源自「梦幻之流」: 深空蓝紫渐变底(与进度页同系) + 角落高斯模糊光斑,
+        //   品牌 logo = 渐变圆 + wand_and_stars 矢量符号, 环境卡玻璃质感(半透明+细描边),
+        //   启动按钮 = 渐变胶囊 + play 矢量符号。
+        //   语义不变: 无环境管理; 唯一触发点仍是「启动 梦幻之流」按钮
+        //   (verify_smoke 按该文本匹配节点, 文字不允许改)。
+        Stack() {
+          // 角落光斑(静态装饰): 低透明度 + blur 大圆, "流光"氛围; 无动画, 首屏一次性渲染
+          Column()
+            .width(320).height(320).borderRadius(160)
+            .backgroundColor(0xB16FE8).opacity(0.22).blur(80)
+            .position({ x: 400, y: -180 })
+          Column()
+            .width(300).height(300).borderRadius(150)
+            .backgroundColor(0x2563EB).opacity(0.20).blur(70)
+            .position({ x: -140, y: 320 })
 
-          Button('启动 梦幻之流')
-            .width('70%')
-            .height(50)
-            .fontSize(17)
-            .margin({ top: 28 })
+          Column() {
+            // 品牌区: 渐变圆 logo + 名称 + 副标
+            Stack() {
+              Column().width(76).height(76).borderRadius(38)
+                .linearGradient({ angle: 135, colors: [[0x8B5CF6, 0.0], [0x4F46E5, 1.0]] })
+                .shadow({ radius: 22, color: '#668B5CF6', offsetY: 6 })
+              SymbolGlyph($r('sys.symbol.wand_and_stars'))
+                .fontSize(38)
+                .fontColor([0xFFFFFF])
+            }
+            .width(76).height(76)
+            .margin({ top: 48 })   // 避状态栏 + 首屏呼吸感(沉浸式下 y=0 即屏顶)
+
+            Text('梦幻之流')
+              .fontSize(34)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(0xFFFFFF)
+              .margin({ top: 22 })
+            Text('MagicFlow · HarmonyOS 本地 AI 推理')
+              .fontSize(13)
+              .fontColor('#A5B3D8')
+              .margin({ top: 6 })
+
+            // 环境卡: 玻璃质感(半透白底 5% + 描边 10%)
+            Column() {
+              Row() {
+                Text('梦幻之流 环境')
+                  .fontSize(19).fontWeight(FontWeight.Medium).fontColor(0xFFFFFF)
+                Text('SD-Turbo')
+                  .fontSize(11).fontColor('#C7D2FE')
+                  .backgroundColor('#334F46E5')
+                  .borderRadius(9)
+                  .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+              }
+              .width('100%')
+              .justifyContent(FlexAlign.SpaceBetween)
+              .alignItems(VerticalAlign.Center)
+
+              Text('256×256 本地生成 · 低内存形态')
+                .fontSize(13).fontColor('#A5B3D8')
+                .margin({ top: 8 })
+              Row().width('100%').height(1).backgroundColor('#1AFFFFFF')
+                .margin({ top: 14, bottom: 12 })
+              Text('模型目录: Download/app.hackeris.hium/models')
+                .fontSize(11).fontColor('#8A97BF')
+            }
+            .width('80%')
+            .alignItems(HorizontalAlign.Start)
+            .padding({ left: 18, right: 18, top: 16, bottom: 16 })
+            .borderRadius(20)
+            .backgroundColor('#0DFFFFFF')
+            .border({ width: 1, color: '#1AFFFFFF' })
+            .margin({ top: 44 })
+
+            // 启动按钮: 渐变胶囊 + play 符号(文本不动, verify_smoke 按「启动 梦幻之流」匹配)
+            Button() {
+              Row({ space: 6 }) {
+                SymbolGlyph($r('sys.symbol.play_fill')).fontSize(18).fontColor([0xFFFFFF])
+                Text('启动 梦幻之流').fontSize(17).fontWeight(FontWeight.Medium).fontColor(0xFFFFFF)
+              }
+            }
+            .type(ButtonType.Capsule)
+            .width('72%').height(52)
+            .linearGradient({ angle: 90, colors: [[0x7C3AED, 0.0], [0x4F46E5, 0.5], [0x2563EB, 1.0]] })
+            .shadow({ radius: 18, color: '#4D6366F1', offsetY: 6 })
+            .margin({ top: 32 })
             .onClick(() => {
               // 唯一触发点: 用户手势 → 重设施才开始(零自动启动实质)
               this.startApp();
             })
-          Text('后端仅在点击启动后运行; 退出应用即停止')
-            .fontSize(12)
-            .fontColor(0x999999)
-            .margin({ top: 14 })
+
+            // Blank 把说明推到屏幕底部(首屏构图: 品牌/卡/按钮成组在上中部, 提示沉底)
+            Blank()
+            Text('启动后才开始运行 · 退出应用即停止 · 数据不出设备')
+              .fontSize(11).fontColor('#7481A6')
+              .margin({ top: 22, bottom: 20 })
+          }
+          .width('100%')
+          .height('100%')
+          .alignItems(HorizontalAlign.Center)
         }
         .width('100%')
         .height('100%')
-        .alignItems(HorizontalAlign.Center)
+        .linearGradient({ angle: 165, colors: [[0x0A0E1E, 0.0], [0x1A2154, 0.55], [0x3B2A78, 1.0]] })
       }
     }
     .width('100%')
