@@ -10,7 +10,7 @@
 | 装载全链修复(mbind/60 LAPACK/gfortran stub) | PROBE-DLOK;未定义符号差=0 |
 | 真机出图 | 256×256 SD-Turbo ≈88s(字节级复现 103,411B) |
 | **全链字节级复现** | docs/BUILD.md + thirdparty/ohos-torch/run_repro_chain.sh |
-| AscendC 调研结论 | docs/ascendc-npu-acceleration.md(CANN Kit 仅 9020+,本机 9000 系不合) |
+| NPU 可行性结论(定稿) | poc/npu/README.md(唯一权威;NPU 仅 9020+/9030+,本机 9000 系不合) |
 | 设备能力上限定谳 | F32 模型 5.2G → 512 级 SIG9 OOM;**本机上限 256 级** |
 
 ## 2. 收尾小活(2026-09-05 已完成)
