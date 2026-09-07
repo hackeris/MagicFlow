@@ -1,0 +1,63 @@
+/**
+ * poc/npu —— NPU 能力验证 demo(独立工程)。
+ * 签名/包名与主项目一致(app.fuqidian.magicflow, 共享 default_MagicFlow_* 调试签名):
+ *   同一设备上本 demo 与主项目 HAP 互相覆盖安装,不可共存 —— 详见 README.md。
+ * 签名材料路径与主项目 build-profile.json5 相同(绝对路径, 由 DevEco 自动签名生成)。
+ */
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "/data/share/hap/.ohos/config/default_MagicFlow_5289PJwGwGFH7UxFmVgs5-9t3tilQh9gdScLczH-hAQ=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001B34BD6BA522DAE773A1AF12464A5DA027A1C3668B16E2A8053B56B9DA100424B3B7F4D03860B11C",
+          "profile": "/data/share/hap/.ohos/config/default_MagicFlow_5289PJwGwGFH7UxFmVgs5-9t3tilQh9gdScLczH-hAQ=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "/data/share/hap/.ohos/config/default_MagicFlow_5289PJwGwGFH7UxFmVgs5-9t3tilQh9gdScLczH-hAQ=.p12",
+          "storePassword": "0000001B9031A8D3C8E938D6FEECB266FFE0A67E19443A9463F28CDC5386668C21263D5664AB5C64055EDD"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "targetSdkVersion": "6.1.1(24)",
+        "compatibleSdkVersion": "6.1.1(24)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "nativeCompiler": "BiSheng",
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug",
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

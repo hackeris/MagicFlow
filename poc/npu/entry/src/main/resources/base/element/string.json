@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "NPU POC demo"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "NPU POC demo"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "NPU POC"
+    }
+  ]
+}
