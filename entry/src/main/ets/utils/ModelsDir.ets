@@ -18,7 +18,8 @@ export interface ModelsRootInfo {
   viaPicker: boolean;   // true=用户可见目录; false=沙箱降级
 }
 
-const SUBDIRS = ['checkpoints', 'loras', 'vae', 'controlnet', 'upscale_models', 'embeddings'];
+// 2026-09-08 P0 + diffusion_models(Flux 系加载路径; catalog flux1-dev-fp8 变体落此处)
+const SUBDIRS = ['checkpoints', 'loras', 'vae', 'controlnet', 'upscale_models', 'embeddings', 'diffusion_models'];
 const ROOT_CACHE_FILE = 'models_root.json';
 const YAML_REL = 'comfyui/extra_model_paths.yaml';
 
@@ -119,6 +120,7 @@ const README_TXT = `ComfyUI 模型目录(本目录用户可见)
   controlnet/           ControlNet 模型
   upscale_models/       放大模型(Real-ESRGAN 等)
   embeddings/           文本嵌入
+  diffusion_models/     FF 流变压器模型(FLUX 等, 依赖 UNET 节点加载)
 
 使用方法: 从 HuggingFace/Civitai 等下载 .safetensors/.ckpt 文件,
 放入对应子目录; 回到 ComfyUI 刷新模型列表(或重启应用)即可使用。

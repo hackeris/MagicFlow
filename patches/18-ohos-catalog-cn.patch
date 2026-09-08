@@ -1,0 +1,48 @@
+diff --git a/server.py b/server.py
+--- a/server.py
++++ b/server.py
+@@ -167,4 +167,9 @@ OHOS_DL_HOSTS = frozenset({
+ OHOS_DL_HOSTS = frozenset({
+     "huggingface.co", "civitai.com", "civitai.red", "github.com",
+     "127.0.0.1", "localhost",  # 回环: rport 隧道下载(开发/验证)与自举
++    # 2026-09-08 区域化(P0): HF 主站/gh-raw 国内不可达, 镜像域名入列。实测基准
++    #   (docs/comfyui-cn-cloud-strategy.md): modelscope resolve 1.34MB/s(首选);
++    #   hf-mirror 0.84MB/s 且 xet 302(签名 1h, 贴边)为备选。
++    "modelscope.cn", "hf-mirror.com",
++    # OHOS_DL_REGION v1 — 区域化 catalog 源 + 预量化变体(P0, docs/comfyui-cn-cloud-strategy.md)
+ })
+@@ -172,5 +172,6 @@ OHOS_DL_CATALOG = [
+ OHOS_DL_CATALOG = [
+     {"id": "sd-turbo", "name": "sd_turbo.safetensors", "directory": "checkpoints",
+-     "url": "https://huggingface.co/stabilityai/sd-turbo/resolve/main/sd_turbo.safetensors",
+-     "size_bytes": 0, "tier": "required",
++     "url": "https://modelscope.cn/models/AI-ModelScope/sd-turbo/resolve/master/sd_turbo.safetensors",
++     "url_alt": "https://huggingface.co/stabilityai/sd-turbo/resolve/main/sd_turbo.safetensors",
++     "size_bytes": 2607364064, "tier": "required",
+      "description": "SD-Turbo 256×256 2步; 低内存设备基线(设备预配)"},
+@@ -177,4 +178,5 @@ OHOS_DL_CATALOG = [
+     {"id": "sd-vae-ft-mse", "name": "vae-ft-mse-840000-ema-pruned.safetensors",
+      "directory": "vae",
+-     "url": "https://huggingface.co/stabilityai/sd-vae-ft-mse-original/resolve/main/vae-ft-mse-840000-ema-pruned.safetensors",
++     "url": "https://modelscope.cn/models/AI-ModelScope/sd-vae-ft-mse-original/resolve/master/vae-ft-mse-840000-ema-pruned.safetensors",
++     "url_alt": "https://huggingface.co/stabilityai/sd-vae-ft-mse-original/resolve/main/vae-ft-mse-840000-ema-pruned.safetensors",
+      "size_bytes": 0, "tier": "optional", "description": "偏好 VAE(512 模板备用)"},
+@@ -181,4 +182,5 @@ OHOS_DL_CATALOG = [
+     {"id": "sd15", "name": "v1-5-pruned-emaonly.safetensors", "directory": "checkpoints",
+-     "url": "https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors",
+-     "size_bytes": 0, "tier": "optional",
++     "url": "https://modelscope.cn/models/AI-ModelScope/stable-diffusion-v1-5/resolve/master/v1-5-pruned-emaonly.safetensors",
++     "url_alt": "https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors",
++     "size_bytes": 0, "tier": "optional",
+      "description": "SD1.5 完整权重(~4.3GB, 大/慢; 低内存设备建议仅 sd-turbo)"},
+@@ -185,4 +188,10 @@ OHOS_DL_CATALOG = [
+     {"id": "realesrgan-x4plus", "name": "RealESRGAN_x4plus.pth", "directory": "upscale_models",
+      "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
+      "size_bytes": 67040989, "tier": "optional", "description": "4x 放大(Real-ESRGAN)"},
++    # 预量化 fp8 变体(不做端上转换, 直接下载预量化成品 —— 见 docs/comfyui-cn-cloud-strategy.md §量化)
++    {"id": "flux1-dev-fp8", "name": "flux1-dev-fp8.safetensors", "directory": "diffusion_models",
++     "url": "https://modelscope.cn/models/comfy-org/flux1-dev/resolve/master/flux1-dev-fp8.safetensors",
++     "url_alt": "https://huggingface.co/Comfy-Org/flux1-dev/resolve/main/flux1-dev-fp8.safetensors",
++     "size_bytes": 17246524772, "tier": "optional",
++     "description": "FLUX.1-dev fp8 预量化 ~17.2GB; 仅 32G 内存设备; 12G 勿试"},
+ ]
