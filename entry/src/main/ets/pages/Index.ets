@@ -1,6 +1,7 @@
 import { startComfyChild, npuEnumerate, npuRunAddGraph, npuRunOfflineModelBuffer } from 'libentry.so';
 import { ensureStdlib } from '../utils/Stdlib';
 import { ensureModels, getModelsRoot, modelPath } from '../utils/ModelsDir';
+import { ImageSaveClient } from '../utils/ImageSave';
 import { fileIo } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { webview } from '@kit.ArkWeb';
@@ -99,6 +100,7 @@ struct Index {
   @State logOpen: boolean = false;
   @State logText: string = '';
   controller: webview.WebviewController = new webview.WebviewController();
+  imageSaveClient: ImageSaveClient | null = null;   // 图片下载桥(2026-09-08): Picker 保存
   pollTimer: number = -1;
   tickTimer: number = -1;
   logTimer: number = -1;
@@ -109,6 +111,10 @@ struct Index {
   //   挂在「启动」按钮; 探针只做枚举/构图执行, 不启动后端、不动网络 —— 零自动启动语义不受影响。
   //   结果: filesDir/npu-probe-ark.log(TRUNC 覆盖写, hdc 只读可拉)。
   aboutToAppear(): void {
+    // 图片下载桥(2026-09-08): 前端图片"下载"按钮经此保存到用户选择的位置
+    if (this.imageSaveClient === null) {
+      this.imageSaveClient = new ImageSaveClient(getContext(this));
+    }
     const arkLog = `${getContext(this).filesDir}/npu-probe-ark.log`;
     const arkWrite = (msg: string): void => {
       try {
@@ -347,6 +353,18 @@ struct Index {
           .javaScriptAccess(true)
           .domStorageAccess(true)
           .fileAccess(true)
+          .onControllerAttached(() => {
+            // 图片下载桥(2026-09-08): 仅可信源(本地后端 8188)。
+            //   ⚠ 只用同步 methodList(不带 asyncMethodList)——文档明示「异步方法无法
+            //   获取返回值」, 且同名方法双列表注册会被强制转为异步; 同步注册的方法返回
+            //   类型支持 Promise, JS 端 await 即拿到返回值(2026-09-08 实测: 异步注册
+            //   只得到 undefined, JS 端 .then 抛 TypeError → 报「图片下载失败」)。
+            if (this.imageSaveClient) {
+              this.controller.registerJavaScriptProxy(this.imageSaveClient,
+                '__ohosImageSave', ['pickAndSave']);
+              hilog.info(DOMAIN, TAG, 'image save bridge registered');
+            }
+          })
           .onPageBegin((event) => {
             hilog.info(DOMAIN, TAG, 'Web page begin: %{public}s', event.url);
           })

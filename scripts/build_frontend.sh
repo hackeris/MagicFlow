@@ -9,6 +9,10 @@
 #         pnpm@11.13.1(node25 下 npm -g 安装; corepack 在 node22 上崩, 不用)
 #
 # 用途/回退: 官方 dist zip 滚出链; 本脚本产物为唯一前端来源(定制在此树上 commit)。
+# ⚠ 改了 fork 源码并 commit(推送 remote + 本地 ohos 分支对齐)后, 必须同步升级两处 pin,
+#   缺一即链断: ① config/externals.pins.tsv 的 comfyui-frontend-src(commit pin, 否则
+#   fetch_externals.sh 会把 fork 强制 checkout 回旧 commit, 改动静默消失——2026-09-08 事故);
+#   ② comfyui-frontend-index.html md5(脚本 make_comfyui_stage.py FE_INDEX_MD5 同值同步)。
 set -eo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
