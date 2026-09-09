@@ -131,6 +131,7 @@ ohos_patch_applied() { # $1=SRC 树
         && grep -q 'OHOS_MODEL_DL v1' "$1/server.py" 2>/dev/null \
         && grep -q 'OHOS_TEMPLATES_DEFAULT_DIR v1' "$1/server.py" 2>/dev/null \
         && grep -q 'OHOS_DL_REGION v1' "$1/server.py" 2>/dev/null \
+        && grep -q 'OHOS_DL_SSL v1' "$1/server.py" 2>/dev/null \
         && [ -f "$1/templates/index.json" ]
 }
 fetch_comfyui_src() {
@@ -188,6 +189,13 @@ fetch_comfyui_src() {
         ( cd "$SRC" && git apply "$ROOT/patches/18-ohos-catalog-cn.patch" ) || \
             die "③d patch 18(区域化 catalog)应用失败"
         log "  [OK] 区域化 catalog(18) applied"
+    fi
+    # ③e 下载 SSL 修复(P0.1, 2026-09-09 真机实锤): 设备无系统 CA 目录 → urlopen 默认
+    #   context 证书校验失败; 显式 certifi bundle。幂等, 缺即 apply(独立于 18)。
+    if ! grep -q 'OHOS_DL_SSL v1' "$SRC/server.py" 2>/dev/null; then
+        ( cd "$SRC" && git apply "$ROOT/patches/19-ohos-dl-ssl.patch" ) || \
+            die "③e patch 19(下载 SSL)应用失败"
+        log "  [OK] 下载 SSL(19) applied"
     fi
     # ③b smoke 自检节点独立 patch(2026-09-05, docs/smoke-design.md): 幂等——节点文件在即 skip
     #   2026-09-05 补丁含 __init__.py(ComfyUI 目录型节点必带); 老版树(仅 custom_node.py)按产物补齐
