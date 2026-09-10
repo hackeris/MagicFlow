@@ -8,7 +8,7 @@ skh-run.tar.gz	lfs	https://gitcode.com/openharmony-robot/thirdparty_pytorch.git	
 
 comfyui-frontend-dist.zip	url	https://github.com/Comfy-Org/ComfyUI_frontend/releases/download/v1.54.1/dist.zip	a89cf5e8afed3f6bc00c3a2d68bd43a69ecc0c7dbfd7d9a05ee3c4c18d248806	24601619	(回退条目, 链已退场) 官方前端 dist v1.54.1 zip 自身 sha; 其 index.html md5 锚=19064c6f(旧值, 与下方自建行无关)
 
-comfyui-frontend-index.html	md5	-	798149837234371aee32a7f100a57773	-	前端自建 dist(thirdparty/comfyui-frontend/dist, 源码 v1.54.4+ohos 81a36cf 图片下载桥)内 index.html md5(防"下载到了 npm minified 板"等错误包)
+comfyui-frontend-index.html	md5	-	9f1a3067245dcaaaeb4c73abafdb7a8d	-	前端自建 dist(thirdparty/comfyui-frontend/dist, 源码 v1.54.4+ohos ace05f7 下载取消修复)内 index.html md5(防"下载到了 npm minified 板"等错误包)
 
 comfyui-src	git	https://github.com/comfyanonymous/ComfyUI.git	03468f4	-	commit=03468f4;clone 后 checkout,再 git apply --check patches/comfyui-src-ohos-changes.patch;apply 后 seedvr/model.py 须含 _dynamo_disable 证据串(见 fetch 脚本校验)
 
@@ -20,4 +20,4 @@ pytorch-src	git	https://github.com/pytorch/pytorch.git	449b1768410104d3ed79d3bcf
 openblas-src	git	https://github.com/OpenMathLib/OpenBLAS.git	8795fc7985635de1ecf674b87e2008a15097ffab	-	v0.3.29 tag commit=8795fc7; fetch clone --branch v0.3.29; 补丁 13/14 由 build_openblas_ohos.sh 应用; 旧 externals/openblas(本地态)仅作 local repo 回退
 py312-host	url	https://www.python.org/ftp/python/3.12.7/Python-3.12.7.tgz	73ac8fe780227bf371add8373c3079f42a0dc62deff8d612cd15a618082ab623	27016272	host python3.12 源码 tar(src 自编→/opt/py312; SOABI=cpython-312 与设备解释器成套; build_torch_ohos.sh 跑 setup.py 用); 编译由 scripts/bootstrap_worktree.sh 负责; 本机 /opt/py312 即由此 tar 编出
 
-comfyui-frontend-src	git	git@github.com:hackeris/ComfyUI_frontend.git	81a36cfd3837f5ea9264fbf8d1844cd6a9a65f7b	-	前端源码树(自维护 fork#hackeris, 默认分支 ohos; 基线=官方稳定 tag v1.54.4(8d24aed); upstream(官方)=git@github.com:Comfy-Org/ComfyUI_frontend.git; 定制 commit 落 ohos, pin 同步升级(2026-09-08 图片下载桥 81a36cf, 前值 6ea5729=跳首启引导); 用途=自建 dist(scripts/build_frontend.sh), 官方 dist zip 条目保留为回退)
+comfyui-frontend-src	git	git@github.com:hackeris/ComfyUI_frontend.git	ace05f785218ababa9159c6fb5da03370495d584	-	前端源码树(自维护 fork#hackeris, 默认分支 ohos; 基线=官方稳定 tag v1.54.4(8d24aed); upstream(官方)=git@github.com:Comfy-Org/ComfyUI_frontend.git; 定制 commit 落 ohos, pin 同步升级(2026-09-10 下载取消修复 ace05f7, 前值 81a36cf=图片下载桥); 用途=自建 dist(scripts/build_frontend.sh), 官方 dist zip 条目保留为回退)
