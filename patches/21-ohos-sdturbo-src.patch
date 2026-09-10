@@ -1,0 +1,13 @@
+diff --git a/server.py b/server.py
+--- a/server.py
++++ b/server.py
+@@ -179,4 +179,7 @@ OHOS_DL_CATALOG = [
+-     "url": "https://modelscope.cn/models/AI-ModelScope/sd-turbo/resolve/master/sd_turbo.safetensors",
+-     "url_alt": "https://huggingface.co/stabilityai/sd-turbo/resolve/main/sd_turbo.safetensors",
++     # OHOS_DL_SDTURBO_SRC v1 — 2026-09-10 真机实锤: MS 版(AI-ModelScope/sd-turbo)为 fp32
++     #   5.2GB(12G 档 OOM 风险); 官方 fp16 2.6GB 唯 hf-mirror(xet 慢链约 50min, 但对
++     #   12G 档是唯一正确档)。24G+ 设备可用 url_alt(MS fp32 实测 20MB/s)。
++     "url": "https://hf-mirror.com/stabilityai/sd-turbo/resolve/main/sd_turbo.safetensors",
++     "url_alt": "https://modelscope.cn/models/AI-ModelScope/sd-turbo/resolve/master/sd_turbo.safetensors",
+      "size_bytes": 2607364064, "tier": "required",
+      "description": "SD-Turbo 256×256 2步; 低内存设备基线(设备预配)"},

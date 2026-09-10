@@ -133,6 +133,7 @@ ohos_patch_applied() { # $1=SRC 树
         && grep -q 'OHOS_DL_REGION v1' "$1/server.py" 2>/dev/null \
         && grep -q 'OHOS_DL_SSL v1' "$1/server.py" 2>/dev/null \
         && grep -q 'OHOS_DL_ESRGAN_MIRROR v1' "$1/server.py" 2>/dev/null \
+        && grep -q 'OHOS_DL_SDTURBO_SRC v1' "$1/server.py" 2>/dev/null \
         && [ -f "$1/templates/index.json" ]
 }
 fetch_comfyui_src() {
@@ -204,6 +205,13 @@ fetch_comfyui_src() {
         ( cd "$SRC" && git apply "$ROOT/patches/20-ohos-esrgan-mirror.patch" ) || \
             die "③f patch 20(esrgan 镜像源)应用失败"
         log "  [OK] esrgan 镜像源(20) applied"
+    fi
+    # ③g SD-Turbo 源档位修正(P0.3, 2026-09-10 真机实锤): MS 版=fp32 5.2GB(12G OOM 风险)
+    #   → 主源换 hf-mirror fp16 2.6GB, MS fp32 降 url_alt(24G+ 快源); 幂等独立。
+    if ! grep -q 'OHOS_DL_SDTURBO_SRC v1' "$SRC/server.py" 2>/dev/null; then
+        ( cd "$SRC" && git apply "$ROOT/patches/21-ohos-sdturbo-src.patch" ) || \
+            die "③g patch 21(sd-turbo 源档位)应用失败"
+        log "  [OK] sd-turbo 源档位(21) applied"
     fi
     # ③b smoke 自检节点独立 patch(2026-09-05, docs/smoke-design.md): 幂等——节点文件在即 skip
     #   2026-09-05 补丁含 __init__.py(ComfyUI 目录型节点必带); 老版树(仅 custom_node.py)按产物补齐
