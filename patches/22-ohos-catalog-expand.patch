@@ -1,0 +1,49 @@
+diff --git a/server.py b/server.py
+--- a/server.py
++++ b/server.py
+@@ -205,6 +205,45 @@ OHOS_DL_CATALOG = [
+      "url_alt": "https://huggingface.co/Comfy-Org/flux1-dev/resolve/main/flux1-dev-fp8.safetensors",
+      "size_bytes": 17246524772, "tier": "optional",
+      "description": "FLUX.1-dev fp8 预量化 ~17.2GB; 仅 32G 内存设备; 12G 勿试"},
++    # OHOS_DL_CATALOG_EXPAND v1 — 2026-09-11 扩充(用户拍板「<12GB 条目可试」)。
++    #   来源实证(宿主侧, 2026-09-11): MS 列文件 API 核 repo+size / hf-mirror HEAD 核 size;
++    #   url_alt=备用源(纯档案字段, 无运行时回退; 主源失效时人工切换)。MS 优先 ——
++    #   hf-mirror 大文件走 xet 链(实测 sd-turbo 2.6GB ≈50min), MS 设备侧实测 20MB/s。
++    #   命名: lcm-lora 两条 name ≠ url basename(pytorch_lora_weights) —— 落盘用 name,
++    #   便于 loras/ 目录区分(校验只认 basename+后缀, 与 url 无关)。
++    {"id": "sdxl-base", "name": "sd_xl_base_1.0.safetensors", "directory": "checkpoints",
++     "url": "https://modelscope.cn/models/AI-ModelScope/stable-diffusion-xl-base-1.0/resolve/master/sd_xl_base_1.0.safetensors",
++     "url_alt": "https://hf-mirror.com/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
++     "size_bytes": 6938078334, "tier": "optional",
++     "description": "SDXL 1.0 官方权重 (~6.9GB); 建议 24G 内存档; 12G 档不建议"},
++    {"id": "sdxl-vae", "name": "sdxl_vae.safetensors", "directory": "vae",
++     "url": "https://hf-mirror.com/stabilityai/sdxl-vae/resolve/main/sdxl_vae.safetensors",
++     "size_bytes": 334641164, "tier": "optional",
++     "description": "SDXL 官方 VAE (~334MB; 修 SDXL 解码偏色)"},
++    {"id": "controlnet-canny-sd15", "name": "control_v11p_sd15_canny.pth", "directory": "controlnet",
++     "url": "https://modelscope.cn/models/AI-ModelScope/ControlNet-v1-1/resolve/master/control_v11p_sd15_canny.pth",
++     "url_alt": "https://hf-mirror.com/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_canny.pth",
++     "size_bytes": 1445234681, "tier": "optional",
++     "description": "ControlNet v1.1 canny 边缘 (~1.4GB; 配 SD1.5)"},
++    {"id": "controlnet-depth-sd15", "name": "control_v11f1p_sd15_depth.pth", "directory": "controlnet",
++     "url": "https://modelscope.cn/models/AI-ModelScope/ControlNet-v1-1/resolve/master/control_v11f1p_sd15_depth.pth",
++     "url_alt": "https://hf-mirror.com/lllyasviel/ControlNet-v1-1/resolve/main/control_v11f1p_sd15_depth.pth",
++     "size_bytes": 1445235365, "tier": "optional",
++     "description": "ControlNet v1.1 depth 深度 (~1.4GB; 配 SD1.5)"},
++    {"id": "controlnet-openpose-sd15", "name": "control_v11p_sd15_openpose.pth", "directory": "controlnet",
++     "url": "https://modelscope.cn/models/AI-ModelScope/ControlNet-v1-1/resolve/master/control_v11p_sd15_openpose.pth",
++     "url_alt": "https://hf-mirror.com/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_openpose.pth",
++     "size_bytes": 1445235707, "tier": "optional",
++     "description": "ControlNet v1.1 openpose 姿态 (~1.4GB; 配 SD1.5)"},
++    {"id": "lcm-lora-sd15", "name": "lcm-lora-sdv1-5.safetensors", "directory": "loras",
++     "url": "https://hf-mirror.com/latent-consistency/lcm-lora-sdv1-5/resolve/main/pytorch_lora_weights.safetensors",
++     "size_bytes": 134621556, "tier": "optional",
++     "description": "LCM-LoRA SD1.5 加速器 (~135MB; 4-8 步出图)"},
++    {"id": "lcm-lora-sdxl", "name": "lcm-lora-sdxl.safetensors", "directory": "loras",
++     "url": "https://modelscope.cn/models/AI-ModelScope/lcm-lora-sdxl/resolve/master/pytorch_lora_weights.safetensors",
++     "url_alt": "https://hf-mirror.com/latent-consistency/lcm-lora-sdxl/resolve/main/pytorch_lora_weights.safetensors",
++     "size_bytes": 393854624, "tier": "optional",
++     "description": "LCM-LoRA SDXL 加速器 (~394MB)"},
+ ]
+ _OHOS_DL_TASKS: dict = {}          # task_id -> task dict(内存态; cap 见 _trim)
+ _OHOS_DL_LOCK = asyncio.Lock()

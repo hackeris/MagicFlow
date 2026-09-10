@@ -41,6 +41,11 @@ def extract_ns():
         "checkpoints": ([os.path.join(tmp, "checkpoints")], {".safetensors"}),
         "vae": ([os.path.join(tmp, "vae")], {".safetensors"}),
         "diffusion_models": ([os.path.join(tmp, "diffusion_models")], {".safetensors"}),
+        # 2026-09-11 patch 22(catalog 扩充): 新条目目录 —— 与真实 folder_paths 对齐
+        #   (controlnet/loras/upscale_models 均在 core folder_paths.py 中)
+        "upscale_models": ([os.path.join(tmp, "upscale_models")], {".pth", ".safetensors"}),
+        "controlnet": ([os.path.join(tmp, "controlnet")], {".pth", ".safetensors"}),
+        "loras": ([os.path.join(tmp, "loras")], {".safetensors"}),
     }
     class FakeFolderPaths:
         folder_names_and_paths = fpaths
@@ -151,6 +156,22 @@ async def main():
     check("catalog 含预量化变体 flux1-dev-fp8", any(
         e["id"] == "flux1-dev-fp8" and e["size_bytes"] > 0 and
         e["url"].startswith("https://modelscope.cn") for e in catalog))
+    # 2026-09-11 P0.4(catalog 扩充, patch 22): 用户拍板「<12GB 条目可试」——
+    #   7 条新增(SDXL/LCM-LoRA×2/ControlNet v1.1×3/vae)必须齐全、size 锚 >0 且 <12GiB、
+    #   主源为国内镜像(MS 优先 / hf-mirror 备)。
+    exp_ids = {"sdxl-base", "sdxl-vae", "controlnet-canny-sd15", "controlnet-depth-sd15",
+               "controlnet-openpose-sd15", "lcm-lora-sd15", "lcm-lora-sdxl"}
+    got = {e["id"]: e for e in catalog if e["id"] in exp_ids}
+    check("catalog 扩充 7 条齐全(patch 22)", set(got) == exp_ids)
+    check("扩充条目 size 锚全 >0 且 <12GiB", got and all(
+        0 < e["size_bytes"] < 12 * 1024**3 for e in got.values()))
+    check("扩充条目主源=国内镜像", got and all(
+        e["url"].startswith(("https://modelscope.cn", "https://hf-mirror.com"))
+        for e in got.values()))
+    # 目录合法性: catalog 每条 directory 必须在 folder_paths 中(downloader 同判据, 否则 400)
+    fpset = set(ns["folder_paths"].folder_names_and_paths)
+    bad_dir = sorted({e["directory"] for e in catalog if e["directory"] not in fpset})
+    check("catalog 目录全部合法(folder_paths)", not bad_dir)
 
     print("== new_task ==")
     os.makedirs(dest, exist_ok=True)

@@ -204,10 +204,14 @@ echo "$CAT" | python3 -c "
 import sys,json
 try:
     d=json.load(sys.stdin)
-    assert any(e.get('id')=='sd-turbo' for e in d.get('catalog',[]))
-except Exception: print('BAD')
+    ids={e.get('id') for e in d.get('catalog',[])}
+    assert 'sd-turbo' in ids
+    # 2026-09-11 patch 22(catalog 扩充, 用户拍板 <12GB): 抽样断言 + 总数
+    assert {'sdxl-base','controlnet-canny-sd15','lcm-lora-sd15'} <= ids, f'missing expand ids'
+    assert len(ids) >= 12, f'count {len(ids)} < 12'
+except Exception as e: print('BAD', e)
 else: print('OK')
-" 2>/dev/null | grep -q OK && ok "W3 catalog 可达(含 sd-turbo)" || bad "W3 catalog 不可达/缺条目: ${CAT:0:120}"
+" 2>/dev/null | grep -q OK && ok "W3 catalog 可达(sd-turbo + patch22 扩充, ≥12 条)" || bad "W3 catalog 不可达/缺条目: ${CAT:0:160}"
 MEL=$(curl -s -m 8 http://127.0.0.1:8189/models/checkpoints 2>/dev/null || echo "")
 echo "$MEL" | python3 -c "
 import sys,json

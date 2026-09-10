@@ -124,8 +124,9 @@ fetch_frontend() {
 }
 
 # ─────────────────────────────── ③ ComfyUI 源码 + patch ───────────────────────────────
-# 全部 OHOS patch(03 主/15 smoke/16 模型下载/17 模板路由/18 区域化 catalog)证据命中判定 ——
-# SKIP 与"本地已 patch 目录"共用, 防旧树缺新 patch 被 SKIP 短路(2026-09-05 W3; 09-08 P0 +18)。
+# 全部 OHOS patch(03 主/15 smoke/16 模型下载/17 模板路由/18 区域化 catalog/22 catalog 扩充)
+# 证据命中判定 —— SKIP 与"本地已 patch 目录"共用, 防旧树缺新 patch 被 SKIP 短路
+# (2026-09-05 W3; 09-08 P0 +18; 09-11 +22)。
 ohos_patch_applied() { # $1=SRC 树
     grep -q '_dynamo_disable' "$1/comfy/ldm/seedvr/model.py" 2>/dev/null \
         && grep -q 'OHOS_MODEL_DL v1' "$1/server.py" 2>/dev/null \
@@ -134,6 +135,7 @@ ohos_patch_applied() { # $1=SRC 树
         && grep -q 'OHOS_DL_SSL v1' "$1/server.py" 2>/dev/null \
         && grep -q 'OHOS_DL_ESRGAN_MIRROR v1' "$1/server.py" 2>/dev/null \
         && grep -q 'OHOS_DL_SDTURBO_SRC v1' "$1/server.py" 2>/dev/null \
+        && grep -q 'OHOS_DL_CATALOG_EXPAND v1' "$1/server.py" 2>/dev/null \
         && [ -f "$1/templates/index.json" ]
 }
 fetch_comfyui_src() {
@@ -212,6 +214,14 @@ fetch_comfyui_src() {
         ( cd "$SRC" && git apply "$ROOT/patches/21-ohos-sdturbo-src.patch" ) || \
             die "③g patch 21(sd-turbo 源档位)应用失败"
         log "  [OK] sd-turbo 源档位(21) applied"
+    fi
+    # ③h catalog 扩充(P0.4, 2026-09-11 用户拍板「<12GB 条目可试」): SDXL1.0/LCM-LoRA×2/
+    #   ControlNet v1.1×3(MS 全量 14 件中常用三件)/sdxl-vae; 主源 MS(设备侧 20MB/s),
+    #   hf-mirror 作 url_alt(档案字段). 幂等, 缺即 apply(独立于 18-21)。
+    if ! grep -q 'OHOS_DL_CATALOG_EXPAND v1' "$SRC/server.py" 2>/dev/null; then
+        ( cd "$SRC" && git apply "$ROOT/patches/22-ohos-catalog-expand.patch" ) || \
+            die "③h patch 22(catalog 扩充)应用失败"
+        log "  [OK] catalog 扩充(22) applied"
     fi
     # ③b smoke 自检节点独立 patch(2026-09-05, docs/smoke-design.md): 幂等——节点文件在即 skip
     #   2026-09-05 补丁含 __init__.py(ComfyUI 目录型节点必带); 老版树(仅 custom_node.py)按产物补齐

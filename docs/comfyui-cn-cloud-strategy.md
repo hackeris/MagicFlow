@@ -50,6 +50,15 @@
 - **安全注记**: urllib 跟随 302 不校验 redirect host —— 白名单只约束提交的初始 URL。镜像域名本身受控(MS/HF-mirror 不会跳到任意内网), 风险有限; `127.0.0.1` 白名单仍是设计内唯一回环口(有网环境 smoke 除外)。
 - sd-turbo 的 `sha256` **未填**: 宿主缓存(HF 版, sha=6b33199d…)仅作参考锚; 等真机从 MS 源下载后对设备文件校验一致再补(防"MS 版≠HF 版"时误杀)。
 
+**P0.4 catalog 扩充(2026-09-11, `patches/22-ohos-catalog-expand.patch`)**: 用户拍板
+「<12GB 条目可试」→ 新增 7 条: SDXL 1.0(MS 6.94GB)、sdxl-vae(hf-mirror 334MB)、
+ControlNet v1.1 canny/depth/openpose(MS `AI-ModelScope/ControlNet-v1-1`, 各 1.445GB; 该
+repo 全 14 件可用, 按需增补)、LCM-LoRA SD1.5(hf-mirror 135MB)/SDXL(MS 394MB)。
+宿主实证: MS 列文件 API 核 repo+size、hf-mirror HEAD 核 size、MS 分片 206 连通;
+冒烟断言 +4(7 条齐全 / 全 <12GiB / 主源国内镜像 / 目录合法 folder_paths);
+fetch 链 ③h 幂等 apply + 证据串 `OHOS_DL_CATALOG_EXPAND v1`; 从零重放演练
+(基线 03468f4 → 03/17/18/19/20/21/22/15)重放树与工作树逐字节一致。设备侧速度随真机抽验。
+
 ## 4. P1 远程算力 API(W4 立项)
 
 已定稿 [external-api-node-design.md](external-api-node-design.md): 自研 `OHOS_API_Image`/`Text`/`HTTP` 节点组, 输出**标准 IMAGE**(可直接接 PreviewImage/SaveImage/原生下游), 零新依赖(requests/PIL 均在栈内), 社区节点只借鉴设计不背依赖。服务商适配层: 硅基流动(FLUX/SDXL)、阿里百炼(万相)。配套: API 密钥设置页(系统 keystore)+ 本地/云双模自动路由(本地能跑→本地; 否则提示一键转云)。**前置: P0 真机验收**。

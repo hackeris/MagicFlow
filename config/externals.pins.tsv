@@ -8,11 +8,11 @@ skh-run.tar.gz	lfs	https://gitcode.com/openharmony-robot/thirdparty_pytorch.git	
 
 comfyui-frontend-dist.zip	url	https://github.com/Comfy-Org/ComfyUI_frontend/releases/download/v1.54.1/dist.zip	a89cf5e8afed3f6bc00c3a2d68bd43a69ecc0c7dbfd7d9a05ee3c4c18d248806	24601619	(回退条目, 链已退场) 官方前端 dist v1.54.1 zip 自身 sha; 其 index.html md5 锚=19064c6f(旧值, 与下方自建行无关)
 
-comfyui-frontend-index.html	md5	-	2417e0fd5c8dd5de67c797675993c906	-	前端自建 dist(thirdparty/comfyui-frontend/dist, 源码 v1.54.4+ohos 6b7566f 下载行幽灵行修复)内 index.html md5(防"下载到了 npm minified 板"等错误包)
+comfyui-frontend-index.html	md5	-	641e0fec1e0c4f77676c1aead7fb210e	-	前端自建 dist(thirdparty/comfyui-frontend/dist, 源码 v1.54.4+ohos bef1b1d 下载对话框列表可滚动)内 index.html md5(防"下载到了 npm minified 板"等错误包)
 
 comfyui-src	git	https://github.com/comfyanonymous/ComfyUI.git	03468f4	-	commit=03468f4;clone 后 checkout,再 git apply --check patches/comfyui-src-ohos-changes.patch;apply 后 seedvr/model.py 须含 _dynamo_disable 证据串(见 fetch 脚本校验)
 
-python312.zip	anchor	-	f28fdda20e840a1208828769b82e1a0a6be3af4963e0aeb49b8d6741f68ff832	213654821	锚=sorted-namelist sha256(确定性,2026-09-11 重建实证: 同源两次字节 sha 40b11f72/000349a0 漂移而同锚一致,故字节 sha 不作锚); 逐条目内容 sha 见 docs/manifests/python312.zip.manifest.gz(入库比对源)。演进留档: run86=28,080条/8523f5e4, run18=28,087条/151,675,300B
+python312.zip	anchor	-	cdf2ff1e70a73ba604df82e88ff3cf7af109bfb41c72df8f6815035807d958cf	213655656	锚=sorted-namelist sha256(确定性,2026-09-11 重建实证: 同源两次字节 sha 40b11f72/000349a0 漂移而同锚一致,故字节 sha 不作锚); 逐条目内容 sha 见 docs/manifests/python312.zip.manifest.gz(入库比对源)。演进留档: run86=28,080条/8523f5e4, run18=28,087条/151,675,300B; 2026-09-11 两次重建: ①patch22(server.py+39 行) sorted 不变 f28fdda2/size 213655682 ②前端 bef1b1d(对话框滚动修复)dist 轮转 assets 文件名 → sorted 换 cdf2ff1e/size 213655656
 
 pydantic_core-aarch64-musl.whl	url	https://pypi.org/packages/py3/p/pydantic-core/pydantic_core-2.46.5-cp312-cp312-musllinux_1_1_aarch64.whl	efd62a42486f1bda5d24cb4f63d15a3c7768375fe83d36f9417b4ad7a2fb20b3	2158408	pydantic_core Rust 内核(PyPI musllinux_1_1_aarch64,matching skh 栈);解包出 _pydantic_core...musl.so + .libs/libgcc_s-0bf60adc.so.1 走 prebuilt;本地副本 /tmp/wheels/pydantic_core-2.46.5-cp312-cp312-musllinux_1_1_aarch64.whl
 
@@ -20,4 +20,4 @@ pytorch-src	git	https://github.com/pytorch/pytorch.git	449b1768410104d3ed79d3bcf
 openblas-src	git	https://github.com/OpenMathLib/OpenBLAS.git	8795fc7985635de1ecf674b87e2008a15097ffab	-	v0.3.29 tag commit=8795fc7; fetch clone --branch v0.3.29; 补丁 13/14 由 build_openblas_ohos.sh 应用; 旧 externals/openblas(本地态)仅作 local repo 回退
 py312-host	url	https://www.python.org/ftp/python/3.12.7/Python-3.12.7.tgz	73ac8fe780227bf371add8373c3079f42a0dc62deff8d612cd15a618082ab623	27016272	host python3.12 源码 tar(src 自编→/opt/py312; SOABI=cpython-312 与设备解释器成套; build_torch_ohos.sh 跑 setup.py 用); 编译由 scripts/bootstrap_worktree.sh 负责; 本机 /opt/py312 即由此 tar 编出
 
-comfyui-frontend-src	git	git@github.com:hackeris/ComfyUI_frontend.git	6b7566f88d2f3ad7a1057ece4348ad2c0e88addd	-	前端源码树(自维护 fork#hackeris, 默认分支 ohos; 基线=官方稳定 tag v1.54.4(8d24aed); upstream(官方)=git@github.com:Comfy-Org/ComfyUI_frontend.git; 定制 commit 落 ohos, pin 同步升级(2026-09-11 下载行幽灵行修复 6b7566f, 前值 ace05f7=下载取消修复); 用途=自建 dist(scripts/build_frontend.sh), 官方 dist zip 条目保留为回退)
+comfyui-frontend-src	git	git@github.com:hackeris/ComfyUI_frontend.git	bef1b1d1b2a8bbf100a51f20c7028bb334d000fe	-	前端源码树(自维护 fork#hackeris, 默认分支 ohos; 基线=官方稳定 tag v1.54.4(8d24aed); upstream(官方)=git@github.com:Comfy-Org/ComfyUI_frontend.git; 定制 commit 落 ohos, pin 同步升级(2026-09-11 下载对话框列表可滚动 bef1b1d, 前值 6b7566f=下载行幽灵行修复); 用途=自建 dist(scripts/build_frontend.sh), 官方 dist zip 条目保留为回退)
