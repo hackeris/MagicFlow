@@ -1,72 +1,109 @@
-# 梦幻之流(MagicFlow)—— ComfyUI on HarmonyOS
+# 梦幻之流(MagicFlow)—— 把 ComfyUI 装进鸿蒙设备
 
-把 ComfyUI 后端以 NCP 子进程形式内嵌为 HarmonyOS 应用,在 aarch64 真机(PC/Pad)上本地运行。
-当前形态:单入口首页「启动 梦幻之流」→ 4 步启动进度页 → ComfyUI 画布(本地 CPU 推理,SD-Turbo 256×256)。
+在 HarmonyOS 设备(PC / Pad)上本地运行 ComfyUI:后端以鸿蒙原生子进程方式内嵌
+Python 运行时,纯端侧 CPU 推理,全程不需要联网,数据不出设备。
 
-## 1. App 形态
+![ComfyUI 画布](docs/images/canvas.jpg)
+
+## 主要功能
+
+- **本地生图**:SD-Turbo 256×256 两步出图,24GB 内存机型实测约 19 秒一张。
+- **模型一键下载**:内置国内镜像直连的精选模型清单(SD1.5、SDXL、ControlNet、
+  LCM-LoRA、VAE、放大模型等),点一下就能用;也可以把从其它渠道下载的模型放进
+  `Download/app.fuqidian.magicflow/models/` 对应目录,系统文件管理器可见。
+- **完整的 ComfyUI 体验**:基于官方 ComfyUI 0.34 与官方前端 v1.54.4,画布、节点、
+  模板与官方一致;前端页面由后端同源提供,开箱即用。
+
+![模型管理](docs/images/model-download.jpg)
+
+## 安装与使用
+
+1. 设备要求:HarmonyOS 6.x(API 24)的 arm64 设备(PC 或 Pad),内存 12GB 起,
+   建议 24GB 以上。
+2. 安装签名后的 HAP(或在 DevEco Studio 中直接运行):
+
+   ```bash
+   hdc file send entry-default-signed.hap /data/local/tmp/magicflow.hap
+   hdc shell bm install -p /data/local/tmp/magicflow.hap
+   ```
+
+3. 打开应用,点首页的「启动 梦幻之流」按钮,等待 1~2 分钟进入画布。
+4. 缺模型时打开左侧「模型库」,点右上角的下载图标,从清单里挑需要的模型下载,
+   完成后模型会出现在节点选择器里。
+
+## 工作原理
+
+应用分成三层:ArkTS 界面负责交互与启动控制,一个鸿蒙原生子进程(NCP)内嵌 Python
+运行时并运行 ComfyUI 后端,界面层用 WebView 加载后端同源提供的前端页面。
 
 ```
-ArkTS 父进程                NCP 子进程                          ArkWeb
-Index.ets(单入口)  ──OH_Ability_StartNativeChildProcess──▶  comfy_child.cpp   ◀── http://127.0.0.1:8188
- 点「启动」→ 拉起            ├─ 内嵌 CPython 3.12(python312.zip)     (同源,前端由后端
- ├─ 4 步进度页(真实信号)     ├─ torch 2.10 + ComfyUI 0.34(patched)    --front-end-root 服务)
- └─ 就绪 → ArkWeb 加载       └─ 后端 comfyui/main.py (HTTP :8188)      (官方面板/模板/下载库)
+ArkTS 界面 (Index.ets)        NCP 子进程                      WebView
+  点「启动」  ───────────▶  comfy_child.cpp
+                            └─ 内嵌 Python 3.12 + PyTorch
+                               └─ ComfyUI 后端 (:8188)  ───▶  官方前端页面(同源加载)
 ```
 
-- 后端只在用户点「启动」后运行;退出 App 即停止(零常驻)。
-- 一切 `.so` 只经 HAP `libs/<abi>/` 经 meta_path Finder(`dlopen` + `PyInit_*`)加载(禁 `patchelf`/绝对路径)。
-- 模型已可下载到系统可见目录 `Download/app.fuqidian.magicflow/models/`(前端模型库一键下载),也可手动放入。
+- 后端只在点击「启动」后运行,退出应用即停止,没有常驻进程;
+- Python 运行时与全部原生库都打包在 HAP 内,安装后无需联网即可使用;
+- 出图与模型全部留在本机,不上传任何数据。
 
-## 2. 复现链(空机器 → 真机验证)
+## 从源码构建
 
-环境要求:Linux x86_64;CLT 6.1.1.280(`/apps/harmony`);rust 工具链(+`aarch64-unknown-linux-ohos`);
-网络(仅 fetch 一步);aarch64 真机(`scripts/env.sh` 的 `HDC_TARGET`,默认 `192.168.1.8:33363`)。
+构建需要一台 x86_64 Linux 机器和完整的鸿蒙工具链(CLT 6.1.1.280,安装到
+`/apps/harmony`)。整个流程可以完整复现,所有外部依赖都带校验锚点。
 
 ```bash
-make fetch      # ① 外部输入 → externals/(sha256 全校验,幂等)
-make extract    # ② skh-run.tar.gz → build/skh-run-extract/(唯一数据源契约)
-make stage      # ③ ComfyUI 源码(+patch 16/17) + 纯 py 依赖 + 自建前端 dist → build/pyroot-stage/
-make rust       # ④ thirdparty/ submodule 源码 → build/rust-out/(两个 Rust 扩展,sha 比对)
-make zip        # ⑤ stage+skh stdlib → rawfile/python312.zip(28,080 条,manifest 锚)
-make prebuilt   # ⑥ 清单驱动收集 libs/ → entry/src/main/cpp/prebuilt/(324 文件,sha/NEEDED 闭环)
-make hap        # ⑦ hvigorw assembleHap → entry-default-signed.hap
-make install    # ⑧ 部署真机(bm install + aa start)
-make verify     # ⑨ 一键黑盒验收: 装机→门户驱导→后端→BLAS/MM4x→出图(全量 8 项,~5min)
-                #    `make verify SMOKE_ARGS="--fast"` = 只验后端+BLAS/MM4x
+make fetch      # 1. 下载全部外部依赖到 externals/(sha256 校验, 可重复执行)
+make extract    # 2. 解包预编译的 Python 运行时
+make stage      # 3. 收集 ComfyUI 源码(打适配补丁)+ Python 依赖 + 前端产物
+make rust       # 4. 编译两个 Rust 扩展(产物 sha 比对)
+make zip        # 5. 打包运行时 python312.zip(约 3.6 万条目, 带清单锚)
+make prebuilt   # 6. 按清单收集原生库(325 个文件, sha 闭环校验)
+make hap        # 7. 构建出 entry-default-signed.hap
+make install    # 8. 安装到真机并启动
+make verify     # 9. 端到端验收: 装机 → 启动 → 矩阵运算 → 出图(约 5 分钟)
 ```
 
-每步失败即停(无"占位/降级继续"的假成功);外部资源锚见 `config/externals.pins.tsv`,
-预置库清单见 `config/prebuilt_manifest.tsv`,zip 锚见 `docs/manifests/python312.zip.manifest.gz`。
+每一步失败都会立即停止,不会带着错误继续往下走。外部资源的版本与校验值见
+`config/externals.pins.tsv`,预置库清单见 `config/prebuilt_manifest.tsv`。
 
-## 3. 目录
+## 目录结构
 
-| 目录 | 内容 |
+| 目录 | 说明 |
 |---|---|
-| `config/` | 外部资源 pin 表 / vendor wheel / prebuilt 清单 |
-| `externals/` | fetch 产物(gitignored): skh-run.tar.gz、comfyui-src、py-site、前端源码树 |
-| `thirdparty/` | submodule: 前端 fork(hackeris/ComfyUI_frontend,ohos 分支)、tokenizers、safetensors、ohos-torch |
-| `stub/` | zip 内注入模板(sitecustomize_tpl / stub_global / psutil)— 模型层缺依赖空壳预置 |
-| `scripts/` | 复现链脚本 + verify_smoke.sh(黑盒判据) |
-| `patches/` | ComfyUI 源码 OHOS 修改(03 主 patch + 16 下载端点 + 17 轻量模板) |
-| `entry/src/main/` | cpp/ NCP 子进程宿主、ets/ ArkTS 前端、resources/ 图标与字符串 |
-| `build/` | 中间产物(全部 gitignored) |
+| `entry/` | 鸿蒙应用工程(ArkTS 界面、NCP 子进程宿主、资源) |
+| `patches/` | ComfyUI 源码适配补丁(主补丁 + 8 个功能补丁, 含下载端点与国内镜像清单) |
+| `scripts/` | 构建与验证脚本(构建流程入口) |
+| `thirdparty/` | 子模块:前端 fork、tokenizers、safetensors |
+| `config/` | 外部依赖版本锚点与预置库清单 |
+| `stub/` | 运行时缺失依赖的空壳实现 |
+| `docs/` | 设计与验证文档 |
+| `externals/`、`build/` | 下载与构建产物(不纳入版本管理) |
 
-## 4. 工具链基线
+## 工具链基线
 
-CLT 6.1.1.280 / hvigor 6.24.2(官方原版)/ SDK 6.1.1 (API24) / hdc 3.2.0d /
-rustc 1.98.0 + `aarch64-unknown-linux-ohos` / node 25(`scripts/build_frontend.sh` 自建前端 dist)。
+CLT 6.1.1.280 / hvigor 6.24.2 / SDK 6.1.1 (API 24) / hdc 3.2.0d /
+rustc 1.98.0(`aarch64-unknown-linux-ohos`)/ Node.js 25。
 
-## 5. 已知缺口
+## 已知限制
 
-- **设备上限 = 256 级**(F32 模型峰值触平台限制,512 必 SIG9;fp16 模型已定谳试过,512 仍触顶);
-- 启动(安装→后端就绪)1~2 分钟属正常(28k 条目解压 + torch 全量装载为架构固有成本);
-- 惰性缺失(启动仅打 warning,不影响主链):`alembic`(远程同步)、`blake3`、`pydantic_settings`
-  (pyproject 解析降级)、upscale/canny 类节点缺 `spandrel`/`kornia`/`comfy_angle` → 对应节点降级不可用;
-- 视频/av、部分 torchvision/scipy 算子未支持(惰性 import 点)。
+- **出图分辨率上限 256**:受设备进程内存限制,512 及以上会因内存触顶被系统终止;
+- **启动需要 1~2 分钟**:首次启动要解压三万余个运行时文件并载入完整 PyTorch,
+  属于架构上的固定成本;
+- **部分节点不可用**:为控制安装包体积,少数使用频率低的依赖没有打包,对应的
+  视频、图像预处理等节点无法使用;
+- **暂不支持 NPU / GPU 加速**:当前为纯 CPU 推理,NPU 方案仍在预研。
 
-## 6. 约定
+以上限制的原因、数据与完整清单见 [docs/known-limitations.md](docs/known-limitations.md)。
 
-- 唯一权威仓库 = 本目录(git + 无大二进制,全链可复现);变更/验证一律在本目录进行。
-- 详细设计见 `docs/`: DESIGN.md(研究史+pin)、BUILD.md(复现链)、smoke-design.md、
-  model-download.md、workspace-design.md、frontend-fork-plan.md、local-inference-torch-parallel.md、
-  torch-backend-cann.md(端侧 NPU 后端方案分析,未立项)。
+## 许可与致谢
+
+本项目以 **GPL-3.0** 许可发布(见 [LICENSE](LICENSE))—— 因为分发的安装包中
+包含以 GPL-3.0 授权的 ComfyUI 代码。
+
+感谢以下开源项目:
+
+- [ComfyUI](https://github.com/comfyanonymous/ComfyUI)—— 后端与节点生态
+- [ComfyUI Frontend](https://github.com/Comfy-Org/ComfyUI_frontend)—— 界面
+- [thirdparty_pytorch](https://gitcode.com/openharmony-robot/thirdparty_pytorch)—— 鸿蒙 PyTorch 运行时
+- 以及 Stability AI、Real-ESRGAN 等模型提供方
