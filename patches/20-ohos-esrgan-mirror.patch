@@ -1,0 +1,11 @@
+diff --git a/server.py b/server.py
+--- a/server.py
++++ b/server.py
+@@ -193,3 +193,6 @@ OHOS_DL_CATALOG = [
+     {"id": "realesrgan-x4plus", "name": "RealESRGAN_x4plus.pth", "directory": "upscale_models",
+-     "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
++     # OHOS_DL_ESRGAN_MIRROR v1 — 2026-09-10 真机实锤: github release 设备侧仅 ~36KB/s
++     #   (宿主 0.78MB/s), 67MB 需 ~30min; hf-mirror 同名重传源设备 12s 完成
++     #   (67,040,989B 与 release 字节一致, size_bytes 锚不变)。
++     "url": "https://hf-mirror.com/schwgHao/RealESRGAN_x4plus/resolve/main/RealESRGAN_x4plus.pth",
+      "size_bytes": 67040989, "tier": "optional", "description": "4x 放大(Real-ESRGAN)"},
