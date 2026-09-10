@@ -825,8 +825,10 @@ def main():
         per_entry = {}
         for _name in entries:
             per_entry[_name] = _h.sha256(z.read(_name)).hexdigest()
+        # ⚠ zip 字节 sha 不入库: 2026-09-11 实测同源两次重建 (40b11f72 / 000349a0) 不同
+        #   (mtime/写入顺序漂移) → 入库即每次构建产生伪 diff。确定性锚 = sorted_namelist
+        #   + per_entry(逐条内容 sha); size 留作辅助(实测稳定, 非锚)。
         mani = {
-            "zip_sha256": _h.sha256(open(OUT, "rb").read()).hexdigest(),
             "zip_size": os.path.getsize(OUT),
             "entries": len(entries),
             "sorted_namelist_sha256": sorted_hash,

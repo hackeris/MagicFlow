@@ -55,7 +55,7 @@ EOF
 }
 SKH_SHA="$(pin_get skh-run.tar.gz sha256)";      SKH_SIZE="$(pin_get skh-run.tar.gz size)"
 COMFY_COMMIT="$(pin_get comfyui-src sha256)"
-ZIP_SHA="$(pin_get python312.zip sha256)";        ZIP_SIZE="$(pin_get python312.zip size)"
+ZIP_SHA="$(pin_get python312.zip sha256)"   # = manifest 的 sorted-namelist sha256(确定性锚; zip 字节 sha 跨次漂移, 不作锚)
 
 # stamp 幂等:stamp_ok <name> | stamp_set <name>（内容=sha 等关键值,已命中即零成本跳过）
 stamp_ok()   { [ -f "$STAMP_DIR/$1.ok" ]; }
@@ -291,9 +291,17 @@ fetch_pydantic_wheel() {
 
 # ─────────────────────────────── ⑥ 前置产物指纹（zip 锚存档） ───────────────────────────────
 check_zip_anchor() {
+    # 锚 = manifest 的 sorted_namelist_sha256(确定性: 条目名集合 + 逐条内容 sha 可复现)。
+    # zip 字节 sha 因 mtime/写入顺序跨次漂移 —— 2026-09-11 实测: 同源两次重建
+    # 40b11f72/000349a0 不同, 而 sorted 锚 f28fdda2 一致; 故不做字节校验。
     local ZP="$ROOT/entry/src/main/resources/rawfile/python312.zip"
-    if [ -f "$ZP" ]; then
-        check_file "$ZP" "$ZIP_SHA" "$ZIP_SIZE" || warn "  ⚠ 既存 python312.zip 与锚不符（将被 make_py312_zip.py 重建）"
+    local MF="$ROOT/docs/manifests/python312.zip.manifest.gz"
+    [ -f "$ZP" ] || return 0
+    [ -f "$MF" ] || { warn "  ⚠ 缺 $MF, python312.zip 锚无法校验"; return 0; }
+    local got
+    got="$(MF="$MF" python3 -c 'import gzip,json,os;print(json.loads(gzip.open(os.environ["MF"],"rb").read())["sorted_namelist_sha256"])' 2>/dev/null)"
+    if [ "$got" != "$ZIP_SHA" ]; then
+        warn "  ⚠ 既存 python312.zip 锚不符（manifest sorted=$(echo "$got" | cut -c1-10) want=$(echo "$ZIP_SHA" | cut -c1-10)）—— make_py312_zip.py 重建"
     fi
 }
 
