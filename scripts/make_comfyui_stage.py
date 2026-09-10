@@ -22,7 +22,7 @@ VENV_SP = os.path.join(EXT, "py-site")          # fetch 的 pip --target 产物�
 COMFY_SRC = os.path.join(EXT, "comfyui-src")    # fetch 的 clone+patch 仓库
 FE_SRC = os.path.join(ROOT, "thirdparty/comfyui-frontend/dist")  # 自建 dist: build_frontend.sh 产物
 #   (2026-09-05 「F 口」: 官方 dist zip 退场, 前端=fork 源码树 stable tag v1.54.4 构建; docs/frontend-fork-plan.md)
-FE_INDEX_MD5 = "9f1a3067245dcaaaeb4c73abafdb7a8d"  # 自建 index.html 锚(源码 v1.54.4+ohos ace05f7 下载取消修复; 与 pins.tsv 一致)
+FE_INDEX_MD5 = "2417e0fd5c8dd5de67c797675993c906"  # 自建 index.html 锚(源码 v1.54.4+ohos 6b7566f 下载行幽灵行修复; 与 pins.tsv 一致)
 OUT = os.path.join(ROOT, "build/pyroot-stage")
 
 # stage 依赖包（venv site-packages 内顶层名 → 目标 zip 相对名）。psutil 单文件特例见下。
