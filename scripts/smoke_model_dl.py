@@ -139,9 +139,15 @@ async def main():
         e["id"] == "sd-turbo" and e["tier"] == "required" for e in catalog))
     # 2026-09-08 P0: 主源国产镜像 + 预量化变体条目
     sd_turbo = next((e for e in catalog if e["id"] == "sd-turbo"), None)
-    check("sd-turbo 主源=ModelScope",
-          bool(sd_turbo) and sd_turbo["url"].startswith("https://modelscope.cn"))
+    # 2026-09-10 P0.3: fp32/fp16 档位修正后 主源=hf-mirror(fp16 2.6G), MS(fp32 5.2G)=url_alt
+    check("sd-turbo 主源=hf-mirror(fp16)",
+          bool(sd_turbo) and sd_turbo["url"].startswith("https://hf-mirror.com"))
+    check("sd-turbo url_alt=MS(fp32 大内存档)", bool(sd_turbo) and
+          str(sd_turbo.get("url_alt", "")).startswith("https://modelscope.cn"))
     check("sd-turbo size 锚(2.6G)", bool(sd_turbo) and sd_turbo["size_bytes"] > 0)
+    esr = next((e for e in catalog if e["id"] == "realesrgan-x4plus"), None)
+    check("realesrgan 主源=hf-mirror",
+          bool(esr) and esr["url"].startswith("https://hf-mirror.com"))
     check("catalog 含预量化变体 flux1-dev-fp8", any(
         e["id"] == "flux1-dev-fp8" and e["size_bytes"] > 0 and
         e["url"].startswith("https://modelscope.cn") for e in catalog))
