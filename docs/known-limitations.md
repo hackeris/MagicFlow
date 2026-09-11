@@ -10,8 +10,9 @@
   原因分析与实测数据见 `local-inference-torch-parallel.md`。
 - **启动需要 1~2 分钟**。首次启动要解压三万余个运行时文件并载入完整 PyTorch,
   之后启动会快一些,但仍属固定成本。
-- **纯 CPU 推理**。矩阵运算走 OpenBLAS(12 线程);NPU 方案仍在预研,当前设备
-  不可用(见 `../poc/npu/README.md`)。
+- **纯 CPU 推理**。矩阵运算走 OpenBLAS(12 线程);NPU 加速的可行性已在
+  9030(KirinXE90)机型上验证通过(33/34 算子),但尚未实现,当前全部推理
+  仍走 CPU(见 `../poc/npu/README.md`)。
 
 ## 模型
 
