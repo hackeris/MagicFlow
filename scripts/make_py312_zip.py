@@ -569,6 +569,37 @@ def main():
             print(f"  !! 缺 {SITECUSTOMIZE_SRC}（run72 sitecustomize 模板）", file=sys.stderr)
             return 2
 
+        # NPU P0（2026-09-11）— torch 后端注册 entry point 注入（**只注入 dist-info 纯文本**）:
+        #   加载链 = torch 官方 out-of-tree 设备后端机制（torch/__init__ 末尾
+        #   _import_device_backends → entry_points(group="torch.backends") → 模块 _register），
+        #   不侵入 torch 源码一行。
+        #   ⚠ 扩展 .so 本身绝不进 zip（栈铁律: 一切被加载 .so 走 HAP libs/<abi>/）:
+        #     它由 nnrt-backend/scripts/build_ext.sh 构建 → collect_prebuilt.sh（manifest
+        #     tag=nnrt）收进 prebuilt/nnrt/ → CMakeLists import_ext_so 送进 HAP libs →
+        #     comfy_child 的 _LibsFinder 扫 libs/ 按短名重定向（与 torch._C/numpy 同构）。
+        #   ⚠ 反例实证（1.5/9030, 2026-09-11, 别再踩）: 曾把 .so 塞进 zip → 文件确在 pyroot
+        #     （NNRT-DIAG: exists=True, size=216768, mode=100666, sys.path 也含 site-packages），
+        #     dlopen 仍报 "Error loading shared library ...pyroot.../_nnrt_bootstrap.so:
+        #     No such file or directory"（无 needed-by 后缀 = musl 顶层 open 失败）
+        #     —— EL2 数据区的 .so 不被 loader 接受, 与文件在不在无关。
+        #   判据用 nnrt-backend/build（build_ext.sh 产物, 与 prebuilt 阶段先后无关）:
+        #   扩展未构建 → 不注入 dist-info（entry point 指向不存在的模块会让 torch import
+        #   抛 RuntimeError, 整条后端链起不来）；缺失仅告警, 不阻断常规构建。
+        NNRT_BUILD = os.path.join(ROOT, "nnrt-backend", "build")
+        _nnrt_exts = sorted(f for f in os.listdir(NNRT_BUILD)
+                            if f.endswith(".so")) if os.path.isdir(NNRT_BUILD) else []
+        if _nnrt_exts:
+            _di = f"{PREFIX}/site-packages/_nnrt_bootstrap-0.1.0.dist-info"
+            z.writestr(f"{_di}/METADATA",
+                       "Metadata-Version: 2.1\nName: _nnrt-bootstrap\nVersion: 0.1.0\n")
+            z.writestr(f"{_di}/entry_points.txt",
+                       "[torch.backends]\nnnrt = _nnrt_bootstrap:_register\n")
+            count += 2
+            print("  [NPU] entry_points.txt 注入（torch.backends → _nnrt_bootstrap:_register）"
+                  f"; 扩展 {_nnrt_exts[0]} 走 HAP libs（prebuilt tag=nnrt）")
+        else:
+            print("  [NPU] 无 nnrt-backend/build/*.so（跳过; P0 需先跑 build_ext.sh）")
+
         # run72 方案 B — stub_global.py(与 comfyui/main.py 同目录):C++ 注入段在
         #   run_path(main.py) 之前先 run_path 本文件,进程内预置 84 叶子 stub(机制与
         #   main_sim run68 版同源,已验证);sitecustomize 版保留于 lib/python3.12/ 作为
@@ -803,12 +834,17 @@ def main():
                 if n == f"{PREFIX}/site-packages/transformers/utils/chat_parsing/__init__.py") == 1,
             "run82 pyyaml dist-info 补给": (
                 f"{PREFIX}/site-packages/pyyaml-6.0.3.dist-info/METADATA" in names),
+            # 铁律: 一切被加载 .so 走 HAP libs/<abi>/ —— **无例外**。NPU 后端扩展同样走
+            #   prebuilt(tag=nnrt)+CMakeLists import_ext_so, 不随本 zip 走; 曾短暂开过的
+            #   `_nnrt_*` 豁免已按实测撤销(1.5/9030: 放 pyroot 的 .so 文件在、尺寸对、
+            #   sys.path 也对, dlopen 仍顶层 open 失败 —— 见本文件 NPU P0 段)。
             "0 个 .so 混入（铁律）": sum(1 for n in names if n.endswith(".so")) == 0,
         }
         for k, v in checks.items():
             print(f"  [{'OK' if v else 'FAIL'}] {k}")
-        if sum(1 for n in names if n.endswith(".so")) != 0:
-            print("  !! 发现 .so 混入 zip（违反铁律）", file=sys.stderr)
+        _bad_so = [n for n in names if n.endswith(".so")]
+        if _bad_so:
+            print(f"  !! 发现 .so 混入 zip（违反铁律）: {_bad_so[:3]}", file=sys.stderr)
             return 2
         if not all(checks.values()):
             return 2

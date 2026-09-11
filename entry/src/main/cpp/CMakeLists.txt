@@ -184,6 +184,20 @@ import_ext_so("_safetensors_rust.abi3.so" SF_LIB)
 set(TK_LIB "")
 import_ext_so("tokenizers.abi3.so" TK_LIB)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# NPU-P0：nnrt-backend 的 torch C++ 扩展（nnrt-backend/scripts/build_ext.sh 产物，
+#   由 collect_prebuilt.sh 按 manifest tag=nnrt 收进 prebuilt/nnrt/）。
+#   加载链 = torch 官方 out-of-tree 设备后端机制（torch/__init__.py 末尾
+#   _import_device_backends → entry_points(group="torch.backends") → _nnrt_bootstrap:_register），
+#   不侵入 torch 源码一行。
+#   ⚠ 必须走 libs/（铁律）：该 .so 带 cpython tag，_LibsFinder 扫 libs/ 时自动收进
+#     「短名→路径」映射 → `import _nnrt_bootstrap` 被重定向到 libs/ 绝对路径。
+#     放 pyroot(EL2 数据区) 时 Python 找得到文件、dlopen 却顶层 open 失败（真机实证，
+#     见 build_ext.sh 文件头）。无需额外桥接代码，与 torch._C/numpy 同构。
+# ─────────────────────────────────────────────────────────────────────────────
+set(NNRT_LIBS "")
+import_ext_so("nnrt/_nnrt_bootstrap.cpython-312-aarch64-linux-ohos.so" NNRT_LIBS)
+
 # ComfyUI 后端子进程（NCP）：入口 extern "C" void Main(NativeChildProcess_Args)。
 # G4 探针(2026-09-04) 使命早已完成(PROBE-DLOK 定谳); 2026-09-05 双分支拆除(USE_PROBE_MAIN/
 #   PROBE_BRANCH 残根), 产品单分支; 探针/自检逻辑全部外置(见 docs/smoke-design.md)。
@@ -216,7 +230,14 @@ file(GLOB _NEEDED_SO
     "${PRE}/_imagingmath.cpython-312-aarch64-linux-ohos.so"
     "${PRE}/_imagingmorph.cpython-312-aarch64-linux-ohos.so"
     "${PRE}/_imagingtk.cpython-312-aarch64-linux-ohos.so"
-    "${PRE}/_safetensors_rust.abi3.so" "${PRE}/tokenizers.abi3.so")
+    "${PRE}/_safetensors_rust.abi3.so" "${PRE}/tokenizers.abi3.so"
+    # NNRT-P0: nnrt 后端扩展必须在此 —— 真机实证(1.5/9030, 2026-09-11):
+    #   仅收进 libs/ 时 finder 能命中、文件也被 loader 接受, 但 relocating 失败:
+    #   "Error relocating .../_nnrt_bootstrap.cpython-...so: PyErr_Fetch: symbol not found"
+    #   —— 本栈 OHOS loader 只给【主模块 NEEDED 树】内的 dso 解析跨库符号; dlopen 一个
+    #   不在此树中的扩展只能从自身 NEEDED 闭包解析(缺 libpython), 与 lib-dynload 的
+    #   math.so 同病。故此扩展须与 torch._C/numpy 一样进 comfy_child 的 DT_NEEDED。
+    "${PRE}/nnrt/*.so")
 foreach(_S ${_NEEDED_SO})
     get_filename_component(_FN "${_S}" NAME)
     list(APPEND _NEEDED_SHORT "-l:${_FN}")
@@ -255,5 +276,8 @@ target_link_libraries(comfy_child PUBLIC
     ${PIL_LIBS}        # PIL 4 个无 SONAME C 扩展：同上
     ${SF_LIB}          # safetensors._safetensors_rust.abi3.so：同上
     ${TK_LIB}          # run82 tokenizers.abi3.so：同上
-    "-Wl,--no-as-needed" "-L${PRE}/torch" "-L${PRE}/dynload" "-L${PRE}/numpy" "-L${PRE}/scipy" "-L${PRE}"
+    ${NNRT_LIBS}       # nnrt-backend 后端扩展（NNRT-P0）: 同上打法 —— 绝对路径仅供 hvigor
+                       #   收集进 libs/, 被 as-needed 修剪; 其符号依赖(libtorch_*/libpython/
+                       #   libc++ __1)均已在上面直接 NEEDED, 故无需 -l:短名。
+    "-Wl,--no-as-needed" "-L${PRE}/torch" "-L${PRE}/dynload" "-L${PRE}/numpy" "-L${PRE}/scipy" "-L${PRE}/nnrt" "-L${PRE}"
     ${_NEEDED_SHORT})  # NEEDED 树=短名（loader 全局符号组）; 见上方机制 v2 注释

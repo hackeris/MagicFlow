@@ -391,3 +391,47 @@ else:
     print('FERRY-STUB n=%d (run90)' % _FN, flush=True)
 print('SIM57-STUB n=%d (sitecustomize) rss=%dKB' % (
     _NST, _rss(), ), flush=True)
+
+# ── NPU-P0 诊断(2026-09-11): 自建 torch 扩展在 Python 进程视图里是否可见 ──
+#   背景: torch 的 out-of-tree 后端自动加载报
+#     ImportError: Error loading shared library .../site-packages/_nnrt_bootstrap.so:
+#                  No such file or directory
+#   而同一文件经 hdc shell 视图可见、md5 与宿主产物一致 —— 需区分「文件在该进程视图
+#   不可见」与「依赖解析失败」两类。此处刻意在 torch 加载**之前**用 ctypes 试探:
+#   若为依赖问题, 错误措辞会点名缺失的库; 若为文件问题, 则是纯 ENOENT。
+#   每步 print(flush), 输出进 diag.log —— 不依赖任何文件写入是否成功。
+print('NNRT-DIAG A start', flush=True)
+try:
+    _nd = _o.path.dirname(_o.__file__)                  # .../lib/python3.12
+    print('NNRT-DIAG B lib=%s' % _nd, flush=True)
+    _np = _o.path.join(_nd, 'site-packages', '_nnrt_bootstrap.so')
+    print('NNRT-DIAG C target=%s exists=%s' % (_np, _o.path.exists(_np)), flush=True)
+    try:
+        _nst = _o.stat(_np)
+        print('NNRT-DIAG D size=%d mode=%o' % (_nst.st_size, _nst.st_mode), flush=True)
+    except BaseException as _ne:
+        print('NNRT-DIAG D stat-exc %r' % (_ne,), flush=True)
+    print('NNRT-DIAG E sys.path[:3]=%r' % (_s.path[:3],), flush=True)
+    # 写文件验证(两处候选, 逐一报告成败)
+    for _cand in (_o.path.join(_o.path.dirname(_nd), 'nnrt-diag.log'),
+                  _o.path.join(_nd, 'nnrt-diag.log')):
+        try:
+            with open(_cand, 'w') as _nf:
+                _nf.write('ok\n')
+            print('NNRT-DIAG F wrote=%s' % _cand, flush=True)
+            break
+        except BaseException as _ne:
+            print('NNRT-DIAG F write-exc %s :: %r' % (_cand, _ne), flush=True)
+    # dlopen 试探(此时 torch 未加载: 依赖问题会点名缺失库, 文件问题则是 ENOENT)
+    try:
+        import ctypes as _ct
+        print('NNRT-DIAG G ctypes-ok', flush=True)
+        try:
+            _nh = _ct.CDLL(_np)
+            print('NNRT-DIAG H dlopen=OK', flush=True)
+        except BaseException as _ne:
+            print('NNRT-DIAG H dlopen-exc %r' % (_ne,), flush=True)
+    except BaseException as _ne:
+        print('NNRT-DIAG G ctypes-exc %r' % (_ne,), flush=True)
+except BaseException as _ne:
+    print('NNRT-DIAG X outer-exc %r' % (_ne,), flush=True)

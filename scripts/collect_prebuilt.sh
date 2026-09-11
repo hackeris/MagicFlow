@@ -12,6 +12,7 @@
 #     pybind11  → .../usr/include/pybind11（72 头, 含 OHOS 定制 type_caster_pyobject_ptr.h）
 #     pc-wheel  → externals/pc-wheel-extract（pydantic_core wheel 解包: _pydantic_core...musl.so + .libs/libgcc_s-0bf60adc.so.1）
 #     rust      → build/rust-out（build_rust_exts.sh 产物）
+#     nnrt      → nnrt-backend/build（build_ext.sh 产物; NPU 后端 torch C++ 扩展, 见其文件头部署铁律）
 #   manifest 行: <目标相对路径> <tag> <sha256>；收集=按 basename 在 tag 源树内 sha 匹配定位。
 #
 # 校验（任一失败 → exit 1,先完成收集再统一报告）:
@@ -49,6 +50,7 @@ src_dir() {
         usr-lib)  echo "$SKXY/usr/lib" ;;
         pybind11) echo "$SKXY/usr/include/pybind11" ;;
         pc-wheel) echo "$EXT/pc-wheel-extract" ;;
+        nnrt)     echo "$ROOT/nnrt-backend/build" ;;
         rust)     echo "$ROOT/build/rust-out" ;;
         *) echo "??Unknown-tag!" ;;
     esac
