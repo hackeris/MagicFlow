@@ -59,6 +59,33 @@ NNRt 在线构图 → 其余算子自动回落 CPU(OpenBLAS)。不改动 skh 预
 - **算子清单按实测排**:开工先跑 profiler 统计一次 SD-Turbo 推理实际调用的 aten 算子与频次,
   按频次实现;不照 34 算子表盲铺。
 
+## 3.5 P1 实施定谳(2026-09-12, 已交付)
+
+一键验证: `bash nnrt-backend/scripts/verify_nnrt_p1.sh [--rebuild]`
+（删产物从零重建 + 真机全链 + 判据断言, 已演练通过）
+
+**已打通**
+- PrivateUse1 骨架: `NnrtAllocator`/`NnrtGuardImpl`/`NnrtHooks` + `rename_privateuse1_backend("nnrt")`
+- `aten::mm` 下沉 NNRt(MATMUL), 数值正确; `aten::matmul` 经 composite polyfill 到 `mm` 同样正确
+- 未下沉算子走 fallback 回 CPU —— 关键是 `op.redispatchBoxed(DispatchKeySet(DispatchKey::CPU), stack)`,
+  **不能**用 `ExcludeDispatchKeyGuard + callBoxed`(必卡)
+
+**⚠ 精度实况(与直觉相反, 决策必读)**
+9030 的 NNRt MATMUL 在 **fp32 声明下实际按 fp16 计算**:
+用 fp16 可精确表示的输入(0.5×0.25)得**零误差**; 随机 fp32 输入被舍入 →
+mean 相对误差 7e-4~1.2e-3、max ~1e-2, **且与 K 无关**(K8 甚至大于 K64 ⇒ 非累加损失)。
+故数值判据为 `mean < 5e-3`, **不能**按 fp32 的 1e-6 要求。SD 级出图对该量级噪声鲁棒。
+
+**⚠ 两条踩坑(已写进代码注释与验证脚本头)**
+1. **NNRt 编译缓存会串图**: 同一 `cacheDir` 下, 它把别的图的编译结果交给当前图 —— 实测
+   P1-a 的 ADD 图(shape `[1,2,2,3]`)污染了 MATMUL, 执行器报出 `[1,2,2,3]`、输出恒为
+   `2.0`(=1.0+1.0)。**修法: 按图签名(张量登记顺序×dtype×rank×shape×type)+性能模式分子目录**。
+   ⚠ `poc/npu` 的"33 项零回归"未发现此问题, 因为它只断言 `rcRun==SUCCESS`、**从不校验数值** ——
+   "执行成功 ≠ 算得对"。
+2. **model 所有权必须单方持有**: 算子函数与 `Runner` 析构都销毁同一个 model → `comfy_child`
+   在 `execRun` 之后静默死亡, 日志停在 kernel 最后一行, **伪装成"卡死"**(存活判据又只看主应用
+   进程, 连掩盖三轮)。现约定: **model 归创建它的算子函数独占销毁**, `Runner` 析构只清 exec/comp。
+
 ## 4. 风险与备选
 
 | 风险 | 应对 |

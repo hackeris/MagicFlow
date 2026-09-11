@@ -58,11 +58,12 @@ mkdir -p "$OUT_DIR"
 #   参数仍是不带 tag 的短名(_nnrt_bootstrap), 文件名带 tag 是 CPython 扩展命名规范。
 PYEXT=".cpython-312-aarch64-linux-ohos.so"
 
-# 需要构建的扩展: 源文件 → 模块名(与 PYBIND11_MODULE 一致)
+# 需要构建的扩展: 模块名 + 源文件列表(引擎层 nnrt_engine.cpp 与 torch 集成层
+#   bootstrap.cpp 分文件 —— 引擎与 torch/torch API 解耦, 便于单独替换/复用)
 build_ext() {
-    local src="$1" mod="$2"
+    local mod="$1"; shift
     local out="$OUT_DIR/$mod$PYEXT"
-    echo "[BUILD] $mod  ← $(basename "$src")"
+    echo "[BUILD] $mod  ← $*"
     "$CXX" \
         --target=aarch64-linux-ohos \
         --sysroot="$SYSROOT" \
@@ -77,12 +78,38 @@ build_ext() {
         -Wl,-rpath-link,"$TORCH/lib" \
         -ltorch -ltorch_cpu -ltorch_python -lc10 \
         -l:libc++.so.1 -l:libc++abi.so.1 \
-        -o "$out" "$src"
+        -o "$out" "$@"
+    # ── 产物断言(2026-09-11 事故教训: 仅 "[ -f $out ]" 不足以证明编译成功) ──
+    #   ⚠ 实测: 函数签名改为 "$@" 后漏改此处输入(仍写 "$src"), 变量未定义 → 展开成空参数 →
+    #     clang 无输入文件仍 rc=0 并生成 11,920B 空壳 .so(只有 _init/_fini, 无 PyInit) →
+    #     "[ -f $out ]" 通过 → 报 [OK] 且同步 manifest → **静默产出废包并装机**。
+    #   故两道硬断言: ①源文件逐个存在且非空 ②产物必须导出 PyInit_<mod>(真扩展的铁证)。
+    for _s in "$@"; do
+        [ -s "$_s" ] || { echo "[FAIL] 源文件缺失或为空: $_s"; exit 1; }
+    done
     [ -f "$out" ] || { echo "[FAIL] $mod 产物缺失"; exit 1; }
-    echo "[OK] $mod  $(stat -c%s "$out") bytes"
+    #   ⚠ 须用 llvm-readelf: 实测 GNU readelf --dyn-syms 对本工具链产出的 .so 列不出动态
+    #     符号(返回 0 条且 rc=0, 静默) → 会造成"产物正常却断言失败"的误判。
+    local _re="$SDK/native/llvm/bin/llvm-readelf"
+    [ -x "$_re" ] || _re=readelf
+    #   ⚠⚠ 此处**不可**写成 `"$_re" --dyn-syms "$out" | grep -q ...`: 在 set -o pipefail 下,
+    #     grep 一旦匹配就提前退出 → 上游 readelf 写管道收到 SIGPIPE → 管道整体返回非零
+    #     → 断言把**正常产物**判成失败。2026-09-12 实测: 同一份产物时而 PASS 时而 FAIL
+    #     (433 条 dyn-syms 恰好在管道缓冲区边界附近), 排查耗时且误导方向。
+    #     改变量捕获: 无管道, 即无此竞态。
+    local _syms
+    _syms="$("$_re" --dyn-syms "$out" 2>/dev/null || true)"
+    case "$_syms" in
+        *"PyInit_$mod"*) ;;
+        *)
+            echo "[FAIL] $mod 产物未导出 PyInit_$mod(空壳或链接失败)"
+            exit 1
+            ;;
+    esac
+    echo "[OK] $mod  $(stat -c%s "$out") bytes  (PyInit_$mod ✓)"
 }
 
-build_ext "$CSRC/bootstrap.cpp" "_nnrt_bootstrap"
+build_ext "_nnrt_bootstrap" "$CSRC/bootstrap.cpp" "$CSRC/nnrt_engine.cpp" "$CSRC/backend.cpp"
 
 # ── 同步 manifest 的 nnrt 行(sha 随源码走) ──
 #   本脚本是 nnrt 产物的唯一生成入口 → 在此同步, 清单永不滞后。

@@ -10,14 +10,20 @@
 #   C.   出图 smoke_workflow_256x2.json: status=success 且 execution < 180s
 #     (seed 每轮随机注入(2026-09-05) → 每轮真执行、图像各异, 无缓存假成功;
 #      判据只验 success+耗时+>10KB, 不做字节断言)
-# 用法: bash scripts/verify_smoke.sh [--fast] [--device 192.168.1.8:33363] [--hap <path>]
-#   --fast   只验后端+判据 A/B(不跑出图); --device 默认 192.168.1.8:33363;
+# 用法: bash scripts/verify_smoke.sh [--fast] [--device <host:port>] [--hap <path>]
+#   --fast   只验后端+判据 A/B(不跑出图);
+#   --device 默认取 scripts/env.sh 的 HDC_TARGET(单一事实来源), 显式传参优先;
 #   --hap 默认 entry/build/default/outputs/default/entry-default-signed.hap
 # 输出: PASS/FAIL 逐项 + 关键数字; 任一 FAIL → exit 1。全量约 4-5 分钟。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEVICE="192.168.1.8:33363"
+# 设备值一律取自 env.sh(其 ROOT 与本脚本同值, 覆盖无害)。
+#   ⚠ 2026-09-12 实测教训: 此处曾硬编码 192.168.1.8:33363 —— 调测设备换成 1.5 后
+#     本脚本在第 [0] 步直接 FATAL 退出(装机/采集全没跑), 而调用方用 `| tee` 取退出码
+#     拿到的是 tee 的 0, 失败被当成成功。① 设备值不许写死; ② 别用尾管掩盖退出码。
+. "$ROOT/scripts/env.sh"
+DEVICE="${HDC_TARGET:-192.168.1.5:44959}"
 HAP="$ROOT/entry/build/default/outputs/default/entry-default-signed.hap"
 FAST=0
 while [ $# -gt 0 ]; do
