@@ -26,8 +26,12 @@ BUILD_DIR="$ROOT/build"
 export EXT_DIR="${EXT_DIR:-$ROOT/externals}"
 export BUILD_DIR
 
-# 测试设备（hdc 目标, 用实际连接设备; HDC_TARGET 可覆盖, 如 HDC_TARGET=192.168.1.9:5555）
-export HDC_TARGET="${HDC_TARGET:-192.168.1.8:33363}"
+# 测试设备（hdc 目标, 用实际连接设备; HDC_TARGET 可覆盖, 如 HDC_TARGET=192.168.1.6:33363）
+# 2026-09-11: 默认设备改为 1.5(192.168.1.5:44959, 9030/KirinXE90)。
+#   教训: 旧默认 192.168.1.8:33363 已不在线(设备 IP 变更), 而 hdc 对不在线的 -t
+#   会静默 fallback 到其他在线设备 —— 装机/拉日志全落到 1.6 上, 排查方向被带偏。
+#   改设备前先 `hdc list targets` 核对。
+export HDC_TARGET="${HDC_TARGET:-192.168.1.5:44959}"
 export HDC="$OHOS_SDK/toolchains/hdc -t $HDC_TARGET"
 export BUNDLE="app.fuqidian.magicflow"
 
