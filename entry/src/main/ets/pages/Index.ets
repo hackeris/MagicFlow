@@ -141,7 +141,12 @@ struct Index {
       //   2026-09-06 源码定谳: Build 必须先 SetCache(缓存目录 App 可写) → 传 filesDir/nncache
       try {
         const nnCacheDir = `${getContext(this).filesDir}/nncache`;
-        fileIo.mkdirSync(nnCacheDir, true);
+        // 幂等: 目录已存在时 mkdirSync 抛 13900015(File exists)。不吞会连累整段探针 ——
+        //   2026-09-11 实测(1.5/9030): 第二次启动起 npu-run-add 恒报 EX, 后面的构图执行
+        //   与离线通道整段被跳过(探针"假失败", 与 NPU 无关)。
+        try {
+          fileIo.mkdirSync(nnCacheDir, true);
+        } catch (_) { /* 已存在 = 正常 */ }
         s += `napi npu-run-add:\n${npuRunAddGraph(nnCacheDir)}\n`;
         // ③ 离线模型执行(Buffer 版, 2026-09-07): rawfile → ConstructWithOfflineModelBuffer,
         //   免拷贝; 异步执行完成后回填 npu-offline.log(TEST_DONE 通道)。
