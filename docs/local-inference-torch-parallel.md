@@ -49,7 +49,7 @@ CXX_COMPILER=/usr/bin/aarch64-linux-ohos-clang++   COMMIT_SHA=449b176
 - 其他候选(未探): mobile-式 threadpool(USE_PTHREADPOOL)与 `THREADPOOL` backends 的切换,如 A' 不达预期再评估。
 
 ## 4. 复现材料
-- 设备探针: `thr-probe.log` = `/data/app/el2/100/base/app.hackeris.hium/haps/entry/files/pyroot/thr-probe.log`(n/interop/affinity/env/OMP-DIRECT/MM4x/CONFIG-FULL)
+- 设备探针: `thr-probe.log` = `/data/app/el2/100/base/app.fuqidian.magicflow/haps/entry/files/pyroot/thr-probe.log`(n/interop/affinity/env/OMP-DIRECT/MM4x/CONFIG-FULL)
 - 探针代码: `scripts/make_py312_zip.py` STAGE 段 `comfyui/comfy/utils.py` 注入(run102-104)
 - 源码: `/tmp/ptsrc`(pytorch v2.10.0 sparse); thirdparty_pytorch `/tmp/tpp`(build.sh + 7 patches)
 
@@ -120,8 +120,12 @@ torch 侧 libomp 并行区(attention/conv 的 `parallel_for`)内部再调 pthrea
 ### 6.5 设备能力上限(实锤,勿再踩)
 - 设备 MatePad 11.5 S / 11.8GB 物理+6GB swap;NCP 进程基线 ≈2.3-2.5GB(pyroot+torch)
 - **模型为 F32(1229 张全 F32,5.2GB)** → 加载常驻 5.2G;256×1 峰值压线通过;**512×1 峰值 >5.1G 触发内核 SIG9 直接杀**(SUSPEND_MANAGER `[PID KILLED][SIG 9]` 实锤)——**不是引擎崩,是 OOM**
-- **本机可跑上限: 256×256 级;**512 需先 fp16 化模型(省 2.6G)才可能,当前不作(受内存约束,判据 512×4≤6min 在本机**不可达成**,已按用户决定放弃,记录在案)
-- 建议后续: 模型 fp16 转换流式工具已备(`/tmp/fp32_to_fp16.py`,仅 numpy+safetensors);若未来换 14G+ 设备或 fp16 模型后再复测 512
+- **本机可跑上限: 256×256 级**。~~512 需先 fp16 化模型(省 2.6G)才可能~~ **⚠️ 已证伪(2026-09-05
+  fp16 试点):fp16 模型(常驻 5.2G→2.6G)后 448/512 仍然 SIG9 —— 峰值 5.0-6.3G,而全局内存仍空
+  5.4G ⇒ 属平台级限制(cgroup/调度器),非全局 OOM。判据 512×4≤6min 在本机不可达成,已按用户决定
+  放弃,记录在案。** 数据见 `docs/status-and-next.md` §2。
+- 建议后续: 模型 fp16 转换流式工具已入库 `scripts/fp32_to_fp16.py`(仅 numpy+safetensors);
+  512 的解锁路径只剩「减小运行时基线(≈2.3G)」或换更大内存机型。
 
 ### 6.6 定稿锚
 - HAP: `entry/build/default/outputs/default/entry-default-signed.hap`(482,532,736B, 2026-09-05 01:46)

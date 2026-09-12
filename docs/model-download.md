@@ -1,8 +1,9 @@
 # 模型下载系统(W3)—— 协议与 catalog 定型
 
 > 2026-09-05 依据 W3 计划(S2 实施前置)定型。目标:模型经官方前端"缺模型条目/浏览
-> 对话框"一键下载入库,落点为**用户可见目录**`Download/app.hackeris.hium/models/`(ArkTS
+> 对话框"一键下载入库,落点为**用户可见目录**`Download/app.fuqidian.magicflow/models/`(ArkTS
 > picker 获取,extra_model_paths.yaml `is_default: true` 使 core 首选该路径)。
+> （注:2026-09-07 包名由 `app.hackeris.hium` 改为 `app.fuqidian.magicflow`,下方正文路径同此。）
 > 实现:core patches/16-ohos-model-download.patch(server.py 下载端点)。
 
 ## 1. 端点协议(server.py `@routes` 闭包区;自动 `/api` 双注册)

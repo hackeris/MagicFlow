@@ -1,5 +1,10 @@
 # Phase 0 设计 — ComfyUI on HarmonyOS 最小验证
 
+> ⚠️ **本文是 Phase 0 的设计记录（2026-09-01/02），各 Step 均已完成**，保留作为决策过程。
+> 已知取代点：① Step 0.2 实际走的不是 Python 3.13，而是切 **3.12.7**；② 文中复现链锚数字
+> （条目数/字节数）为**时点值**，现行权威在 `config/externals.pins.tsv`。
+> **当前状态见 `README.md` 与 `docs/status-and-next.md`。**
+
 参考组织：`../wineohos`（Makefile 多目标 + `scripts/env.sh` + `entry/cpp|ets` 分层 + `docs/`）。
 参考运行模型：`../qemuohos`（父 ArkUI 进程经 NCP 拉起 `.so` 子进程）。
 
@@ -33,7 +38,7 @@ ComfyChild : socket check bind=0 connect=0 accept=11 recv=14 'comfy-child-ok'  �
 ComfyChild : Main EXIT
 ```
 工程产物：2.7MB signed HAP；`libcomfy_child.so` 导出 `Main`；`libentry.so` 导出 `RegisterEntryModule`/`startComfyChild`。
-要点：aarch64 设备**要求签名**（unsigned 被拒 `no signature file`），用 signed.hap；bundleName 复用 qemu 的 `app.hackeris.hium`（debug 签名）。
+要点：aarch64 设备**要求签名**（unsigned 被拒 `no signature file`），用 signed.hap；bundleName 复用 qemu 的 `app.hackeris.hium`（debug 签名）。*（历史时点：bundleName 已于 2026-09-07 改为 `app.fuqidian.magicflow`。）*
 fork/exec read=0：`/system/bin/sh -c uname` 未回写输出（疑似 sh 不可用），但 fork+exec 成功（拿回 child pid）——已证明"能再派生"；后续换 toybox 确认输出。
 
 ## Step 0.2 实测结果（2026-09-01 · aarch64 真机）

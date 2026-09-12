@@ -1,54 +1,69 @@
 # 状态与后续(Status & Next)
 
-> 2026-09-05 定稿。当前阶段:**核心目标已完成,处于"交付态整理"平台期**;本文记录收尾清单与后续推进方向(决策以本文件为准)。
+> 2026-09-12 更新(初稿 2026-09-05)。本文是**项目级状态页**:已交付什么、还剩什么、为什么。
+> 各专项的设计、数据与验证细节在对应文档里,本文只做索引与决策记录。
 
 ## 1. 已完成(勿重复投入)
 
 | 目标 | 证据/产物 |
 |---|---|
-| CPU 多线程推理(OpenBLAS 12 核) | MM4x=0.71s(0.61s 复现),`BLAS_INFO=open`;docs/local-inference-torch-parallel.md §6 |
-| 装载全链修复(mbind/60 LAPACK/gfortran stub) | PROBE-DLOK;未定义符号差=0 |
-| 真机出图 | 256×256 SD-Turbo ≈88s(字节级复现 103,411B) |
-| **全链字节级复现** | docs/BUILD.md + thirdparty/ohos-torch/run_repro_chain.sh |
-| NPU 可行性结论(定稿) | poc/npu/README.md(唯一权威;NPU 仅 9020+/9030+,本机 9000 系不合) |
-| 设备能力上限定谳 | F32 模型 5.2G → 512 级 SIG9 OOM;**本机上限 256 级** |
+| CPU 多线程推理(OpenBLAS 12 核) | MM4x=0.71s(0.61s 复现),`BLAS_INFO=open`;`docs/local-inference-torch-parallel.md` §6 |
+| 装载全链修复(mbind/60 LAPACK/gfortran stub) | 未定义符号差=0;同上 §6.1 |
+| 真机出图 | 256×256 SD-Turbo ≈88s;字节级复现 103,411B |
+| **全链字节级复现** | `docs/BUILD.md` + `thirdparty/ohos-torch/run_repro_chain.sh` |
+| **smoke 黑盒验证(10 判据)** | `scripts/verify_smoke.sh` + `make verify`;设计见 `docs/smoke-design.md` |
+| **W1 环境门户 / W1.5 单入口 / W1.6 官方同构启动页** | `docs/workspace-design.md` §3(零自动启动,用户点击才能起后端) |
+| **前端 fork 化**(官方 v1.54.4 + 自维护 ohos 定制线) | `docs/frontend-fork-plan.md`;pin 见 `config/externals.pins.tsv` |
+| **W3 模型管理**(下载端点 + 用户可见模型目录 + 轻量模板) | `docs/model-download.md`;patch 16/17 |
+| **P0 模型获取国产化**(catalog 12 条,国内镜像直连) | `docs/comfyui-cn-cloud-strategy.md` §2-3;patch 18-22 |
+| 品牌更名(梦幻之流 / MagicFlow) | bundleName=`app.fuqidian.magicflow`(2026-09-07) |
+| 图片保存(ArkWeb 桥 + picker 另存) | commit 6cfa2f0 |
+| **NPU 可行性验证 → 结论:不可行,路线终止** | `poc/npu/README.md` **顶部的修正说明**(原"33/34 算子 PASS"已证伪) |
 
-## 2. 收尾小活(2026-09-05 已完成)
+## 2. 设备能力上限定谳
 
-- [x] **临时资源归位**:`fp32_to_fp16.py` → `scripts/`;出图验证样板 workflow → `scripts/smoke_workflow_256x2.json`;`/tmp/g4_*.{json,png}` 已归档。
-- [x] **备份收口**:`/data/share/comfy-ohos-port.old`(5.2G,完整旧研究区)**确认保留**未删(一次确认即可)。
-- [x] **验证探针审计**:COMFTEST-BLAS/MM/MM4x 均在 `#ifndef RELEASE_BUILD` 段(Release 构建自动裁剪);生产配置 `OPENBLAS_NUM_THREADS=12`/`CORETYPE=ARMV8` 在 import 前正式段(非探针,保留)。
-- [x] **设备侧收尾**:diag.log 已清理;当前设备事实——安装=复现链 HAP(39 号);模型=SD-Turbo **fp16**(2,607,364,064B,见 §3-① 试点结论);fport 8189→8188、rport 18000→18001(宿主 /tmp/models http.server 18001 常驻)。
+MatePad 11.5 S / 11.8GB RAM:**稳态规格 = 256×256 级**(fp16 模型)。
 
-## 2.5 fp16 试点结论(2026-09-05,终审)
+| 规格 | 结果 |
+|---|---|
+| 256×256(fp32 模型) | ✅ 87-89s |
+| 256×256(fp16 模型 2.6G) | ✅ 100s(含冷启动+载入),更稳 |
+| 448×448 / 512×512(含 fp16) | ❌ SIG9(峰值 5.0-6.3G) |
 
-**已执行**(工具:scripts/fp32_to_fp16.py,host 转换 12s→2.6GB→设备复用下载链):
+- **fp16 收益已确认**:模型常驻 5.2G→2.6G,存储减半;但**不能解锁 512** ——
+  全局内存仍空 5.4G 时照样 SIG9 ⇒ 属**平台级限制**(cgroup/调度器),非全局 OOM。
+- 瓶颈链:pyroot+torch 运行时基线 ≈2.3G + fp16 模型 2.6G = **4.9G 常驻**,大张量即触顶。
+- 数据详见 §3 与本文件 git 历史(2026-09-05 版 §2.5)。
 
-| 规格(fp16 模型) | 结果 | 数据 |
-|---|---|---|
-| 256×256 steps=2 | ✅ 稳活 | 100s(含冷启动+载入),rss 峰值未触顶 |
-| 448×448 steps=2 | ❌ SIG9 | 峰值 5.04G(瞬时飙至 6.3G),160s 被杀 |
-| 512×512 steps=1 | ❌ SIG9 | **2 步推理已跑完(1:50)** 后 VAE decode 时刻峰值 5.17G 被杀 |
-| 对照 fp32 256 | ✅ | 87-89s |
+## 3. 推进方向(按就绪度)
 
-**结论**:
-1. **fp16 收益确认**:模型常驻 5.2G→2.6G(省 2.6G)+存储减半;256 规格更稳;
-2. **512 级仍不可行**——致命上限≈**5.0-6.3G(进程峰值)**(全局内存空 5.4G 仍 SIG9 ⇒ **非全局 OOM,平台级限制**(cgroup/调度器,shell 无权限读取,证据:同机型多轮一致);
-3. **瓶颈链**:pyroot+torch 运行时基线 ≈2.3G + fp16 模型 2.6G = **4.9G 常驻**,任何大张量(448+ 激活/VAE decode)即触顶;
-4. **最终定论:此机型(11.8G 物理)稳态规格 = 256 级(fp16 模型)**;512 需换大内存机型/或减小运行时基线(后续研究项,非紧急)。
-5. 设备保留 fp16 模型(回退:宿主 `/tmp/models/sd_turbo_fp32.bak.safetensors`)。
-
-## 3. 推进方向(待决策,按性价比)
-
-| # | 方向 | 价值 | 成本/风险 | 优先级建议 |
+| # | 方向 | 价值 | 成本/风险 | 状态 |
 |---|---|---|---|---|
-| ① | fp16 模型试点 | **已完成**(见 §2.5):256 稳活、512 仍触顶;结论=稳态 256 级 | — | 关闭 |
-| ② | workspace 门 + 延迟启动(对齐官方"创建/打开工作空间") | 中(产品观感) | 中:comfyui-src+frontend pin 升级有回归(patch/queue/探针链重验) | 排后 |
-| ③ | CANN/AscendC 试点 | — | 需 9020+ 真机(HW 门槛) | 等硬件 |
-| ④ | 一键 smoke(`make verify`:collect→install→出图→判据) | 中(防回归) | 低 | 顺手 |
+| ① | ~~workspace 门 + 延迟启动~~ | 中(产品观感) | — | **已交付**(W1/W1.5/W1.6) |
+| ② | ~~一键 smoke(`make verify`)~~ | 中(防回归) | — | **已交付**(10 判据) |
+| ③ | ~~fp16 模型试点~~ | — | — | **已完成**,结论见 §2 |
+| ④ | ~~CANN/AscendC 试点~~ | — | — | **已被 NNRt 路线取代** |
+| ⑤ | ~~NPU 后端(NNRt / PrivateUse1)~~ | — | — | **已终止**(设备不支持卷积,见下) |
+| ⑥ | **W4:远程生图 API 节点组** | **高(体验上限)** | 中(见设计文档) | **待立项** —— 设计已定稿,前置(P0 真机验收)已完成 |
+| ⑦ | 品牌/遥测清理 | 中(发布合规底线) | 低-中 | 待做 —— `docs/comfyui-branding-audit.md`(遥测项优先) |
+| ⑧ | 运行时基线优化(减小 2.3G 常驻) | 中(解锁 512 的唯一路径) | 高(动 torch/运行时) | 研究项,非紧急 |
+| ⑨ | workspace 规格选择 UI | 低(512 已放弃,只剩 256 提示) | 低 | 待重新定义范围 |
+
+**W4 说明**(端云策略 §4):自研 `OHOS_API_Text/Image/HTTP` 三节点,让工作流直接调第三方生图
+API,输出标准 IMAGE 张量可接原生下游;零新依赖(custom_nodes 目录机制,与 patch 15 同构)。
+设计见 `docs/external-api-node-design.md` —— ⚠ **实施前需修正该文档中的 patch 编号**
+(文中写 18,已被 `18-ohos-catalog-cn.patch` 占用,应改用 23)。
+
+**NPU 终止原因**(2026-09-12 用户拍板):设备侧 NNRt **不支持卷积算子** ⇒ SD 出图的算力主体
+无法下沉,端到端加速不成立。全部实现与完整证据归档在 `npu-poc` 分支。
 
 ## 4. 决策记录
 
-- 2026-09-05:用户拍板"能跑就行,先把版本固定" → 512×4 判据明确**放弃**(记录在 local-inference-torch-parallel.md §7),不追 fp16 之前;
-- 2026-09-05:复现链验证目标达成 → 归档为 BUILD.md;
-- 官方新版(workspace 门户)行为与我 pin 的 0.34.0/1.54.1 版本代差,不属 bug(Index.ets onAppear 自动 launch 为 POC 自动化遗留,见第 3-②)。
+- 2026-09-05:用户拍板"能跑就行,先把版本固定" → 512×4 判据**放弃**,不追;
+- 2026-09-05:复现链验证目标达成 → 归档为 `docs/BUILD.md`;
+- 2026-09-07:包名改 `app.fuqidian.magicflow`,签名改用共享 `default_MagicFlow_*`;
+- 2026-09-08:用户拍板「外部化两层」→ P0 模型获取国产化(已交付)+ P1 远程算力 API(W4);
+- 2026-09-12:用户拍板**放弃 NPU 计划** → 全部 NPU 工作归档 `npu-poc` 分支(8 提交),
+  master 回到与 `origin/master` 一致;
+- 2026-09-12:文档清账 —— 修正被证伪的 NPU 结论、过期包名/路径/破引用,并清除
+  `prebuilt/nnrt/` 的 NPU 残留(该残留会使 `make hap` 的 prebuilt 死文件断言 FATAL)。

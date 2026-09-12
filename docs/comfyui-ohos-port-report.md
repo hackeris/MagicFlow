@@ -5,6 +5,11 @@
 > 调研日期：2026-09-01
 > 参考项目：`../wineohos`（WineHua）、`../qemuohos`（HiUM/HiVM）、`../wineohos/.temp/Termony`
 > 素材目录：`.temp/`
+>
+> ⚠️ **本文是 Phase 0 的调研快照，多处结论已被后续实作推翻**，保留作为决策过程记录。
+> 已知被取代的点：①全文以 Python 3.13 为前提，实际走的是切 3.12.7（见 `DESIGN.md:73`）；
+> ②关于 libc++ 命名空间（`__h` / `__n1`）的分析被 `DESIGN.md:58-65` 的实测推翻；
+> ③§8 的 Phase 0-4 路线已全部完成。**当前状态请看 `README.md` 与 `status-and-next.md`。**
 
 ---
 

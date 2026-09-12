@@ -11,7 +11,7 @@
 | torch(OpenBLAS 版)安装树 | `build/torch-ohos-install/` | libtorch_cpu.so ≈200MB |
 | OpenBLAS 交叉库 | `externals/openblas-src/lib/libopenblas.a` | 23.2MB |
 | Rust 扩展 | `build/rust-out/tokenizers.abi3.so`、`_safetensors_rust.abi3.so` | 秒级 |
-| python312.zip | `entry/src/main/resources/rawfile/python312.zip` | 211,691,431B(锚) |
+| python312.zip | `entry/src/main/resources/rawfile/python312.zip` | 锚见 `config/externals.pins.tsv`(现行:size=213,655,656B、sorted-namelist sha=`cdf2ff1e…`;2026-09-11) |
 | prebuilt 库集 | `entry/src/main/cpp/prebuilt/`(325 文件闭环) | collect 断言 |
 
 ## 1. 前置依赖(机器态,一次准备)
@@ -88,9 +88,9 @@ make zip && make prebuilt && make hap                 # 锚/闭环/签名 HAP
 
 ```bash
 hdc -t <ip> install -r entry/build/default/outputs/default/entry-default-signed.hap
-hdc -t <ip> shell aa start -a EntryAbility -b app.hackeris.hium
+hdc -t <ip> shell aa start -a EntryAbility -b app.fuqidian.magicflow
 # 等 ~100s, 看 diag.log(沙箱):
-#   /data/app/el2/100/base/app.hackeris.hium/haps/entry/files/pyroot/diag.log
+#   /data/app/el2/100/base/app.fuqidian.magicflow/haps/entry/files/pyroot/diag.log
 ```
 - ✅ `COMFTEST-BLAS` 含 `BLAS_INFO=open`
 - ✅ `COMFTEST-MM4x t=0.6x nthreads=12`(**判据 < 2.0s**)
@@ -98,7 +98,11 @@ hdc -t <ip> shell aa start -a EntryAbility -b app.hackeris.hium
 
 ## 7. 设备能力上限(重要决策记录)
 
-MatePad 11.5 S / 11.8GB RAM:F32 模型常驻 5.2G,推理峰值超 5.1G 即内核 SIG9。**本机可跑上限: 256×256 级**;512 需模型 fp16 化(转换工具流式版 `fp32_to_fp16.py`)或换大内内存机型——判据"512×4 ≤6min"在本机**放弃**,见 `docs/local-inference-torch-parallel.md` §6-7。
+MatePad 11.5 S / 11.8GB RAM:F32 模型常驻 5.2G,推理峰值超 5.1G 即内核 SIG9。**本机可跑上限: 256×256 级**。
+
+512 级已实测放弃:**不是"fp16 化就能解决"** —— fp16 模型(常驻降至 2.6G)试点后,448/512 仍然 SIG9
+(峰值 5.0-6.3G,全局内存仍空 5.4G ⇒ 属平台级限制,非全局 OOM)。判据"512×4 ≤6min"在本机**放弃**。
+数据见 `docs/local-inference-torch-parallel.md` §6.5 与 `docs/status-and-next.md` §2.5。
 
 ## 8. 回退
 

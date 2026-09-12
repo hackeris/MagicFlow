@@ -1,6 +1,7 @@
 # smoke 设计(独立与内聚,零产品代码侵入)
 
-> 2026-09-05 设计稿(未实施)。依据用户两条标准:**① smoke 不侵入产品功能逻辑; ② smoke 逻辑内聚到一处**。
+> 2026-09-05 设计并**当日实施完成**(真机闭环 commit 7f1c846;验收状态见 §3,全部完成)。
+> 依据用户两条标准:**① smoke 不侵入产品功能逻辑; ② smoke 逻辑内聚到一处**。
 
 ## 0. 现状侵入审计(改造对象)
 
@@ -44,7 +45,7 @@ comfyui-src patch:custom_nodes/ohos_smoke/  (独立自检节点)
 
 ## 3. 验收(改造完成后)
 
-- [x] `make verify` 5 判据全 PASS(2026-09-05 首轮 ALL PASS 归档 commit 7f1c846;W1 门户化后的归档待最终一轮);
+- [x] `make verify` 判据全 PASS(2026-09-05 首轮 ALL PASS 归档 commit 7f1c846;W1 门户化后由 `[1b]` 段以 uitest 驱导同一手势完成归档;W3 后判据已扩展至 10 条,现行清单见 `scripts/verify_smoke.sh`);
 - [x] 产品断言:`grep -rn "COMFTEST\|OHOS_SmokeBench" entry/src/main/cpp/` = 0;
 - [x] Release/Debug 构建产物都不含 smoke 符号(`strings libcomfy_child.so | grep COMFTEST` = 空);
 - [x] 出图基准:2026-09-05 起判据 C 改**随机 seed**(见下),不再字节比对;

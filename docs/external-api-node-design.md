@@ -65,10 +65,12 @@
 
 ## 2. 加载与打包链(补丁复用 patch 15/16/17 模式)
 
-1. 新 patch `patches/18-ohos-external-api.patch`:新增 `custom_nodes/ohos_external_api/__init__.py`(暴露 NODE_CLASS_MAPPINGS/DISPLAY 名)+ `custom_nodes/ohos_external_api/nodes.py` + `custom_nodes/ohos_external_api/api_client.py`(HTTP 客户端封装:requests 同步 + 可选 aiohttp async,重试/超时/JSON 解析/占位符替换)。
+1. 新 patch `patches/23-ohos-external-api.patch`:新增 `custom_nodes/ohos_external_api/__init__.py`(暴露 NODE_CLASS_MAPPINGS/DISPLAY 名)+ `custom_nodes/ohos_external_api/nodes.py` + `custom_nodes/ohos_external_api/api_client.py`(HTTP 客户端封装:requests 同步 + 可选 aiohttp async,重试/超时/JSON 解析/占位符替换)。
+   - ⚠️ **编号修正(2026-09-12)**:本文定稿(09-07)时预留 18 号,但该号已被
+     `18-ohos-catalog-cn.patch`(P0 国产化)占用;现行 patch 已排到 22,故本项改用 **23**。
    - **证据串**:`# OHOS_EXTERNAL_API v1`(nodes.py 文件内)+ `NODE_CLASS_MAPPINGS` dict 校验。
    - patch 幂等:同 15(文件存在即 skip;部分存在则逐文件 apply)。
-2. `scripts/fetch_externals.sh` ③d 段:新 patch 18 应用(逐 patch 幂等,失败必死)逻辑——与 ③c/③b 完全同构。
+2. `scripts/fetch_externals.sh` 新段 **③i**(现行段落已排到 ③h/patch 22):patch 23 应用(逐 patch 幂等,失败必死)逻辑——与 ③c/③b 完全同构。
 3. `scripts/make_py312_zip.py`/`make_comfyui_stage.py`:**无需改**——`custom_nodes/` 目录已在 SRC_ROOT_ONLY 之外(copytree 全部),stage 已含(现有 ohos_smoke 验证),zip 自动收。
 4. zip 重新构建 → `python312.zip` **内容锚必变**(新增 3 文件/6 条 pyc + mtime)→ 更新 `pins.tsv` 的 `python312.zip` 行锚(三步走:重建 → make_py312_zip.py 校验 → 更新 tsv 行;漂移字段 zip_sha256 同现行为,`sorted_namelist`+`per_entry` 双锚也需同步)。
 5. `scripts/verify_smoke.sh` 新增判据(见 §4 验证矩阵)。
@@ -98,7 +100,7 @@
 | Q2e(真机) | rport 隧道路径 | `OHOS_API_*` 直接调 `http://127.0.0.1:18080/...`(同模型下载)成功 |
 | Q3(真机) | HTTP 通用节点:GET 任意 json(带 header) | 双输出 TEXT+JSON;响应头/错误处理正确 |
 | Q4(真机) | 错误路径:404/超时/非 json 响应 | 节点报错信息可读(HTTP 状态码 + body 前 200 字),不死机 |
-| R(全量) | `make verify`(原判据全过 + 新判据) | 原 28 判据 + new 4 判据 |
+| R(全量) | `make verify`(原判据全过 + 新判据) | 现行 `scripts/verify_smoke.sh` 有 10 条判据,加本表 4 条后为 14 条 |
 
 ---
 
@@ -134,8 +136,8 @@
 
 ## 7. 实施清单(按序)
 
-1. patch 18 编写(3 文件,含证据串)+ 文档本文件自查(每节真实)。
-2. fetch_externals.sh ③d:patch 18 幂等段(逐文件删除补齐同构)+ 死签。
+1. patch 23 编写(3 文件,含证据串)+ 文档本文件自查(每节真实)。
+2. fetch_externals.sh ③i:patch 23 幂等段(逐文件删除补齐同构)+ 死签。
 3. 重建 zip(for real,stage→make_py312_zip)→ tsv 锚更新。
 4. H0/H1 宿主冒烟。
 5. Q0-Q4 真机;修。

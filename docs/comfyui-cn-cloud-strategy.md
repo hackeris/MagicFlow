@@ -36,7 +36,7 @@
 | github.com **release**(RealESRGAN) | 可达 | 0.78 MB/s | ✓ 保留(仅 raw 不通) |
 | api.siliconflow.cn / dashscope.aliyuncs.com | TLS 可达(404=根路径空) | — | P1 用正式路径再验 |
 
-**结论修正**: 宿主并非无外网 —— 是 HF 主站 / gh-raw 被墙、国内 CDN 与镜像正常; W3 时"Q2 走 rport 隧道"的假设(设备无外网)仍待真机判据(#87 首项: 设备直连镜像)。
+**结论修正**: 宿主并非无外网 —— 是 HF 主站 / gh-raw 被墙、国内 CDN 与镜像正常。~~W3 时"Q2 走 rport 隧道"的假设(设备无外网)仍待真机判据~~ → **✅ 已解决(2026-09-09/10 真机实锤, #87):设备可直连国内镜像,完成 2.6GB 下载→入库→出图;rport 隧道降级为无网环境的兜底保留。**
 
 ## 3. P0 交付(2026-09-08) — 模型获取国产化
 
@@ -48,7 +48,10 @@
 
 - `OHOS_CATALOG_MIRROR` env 机制保留(手工覆盖; rport 隧道 smoke 不受影响——smoke 直 POST 不过 catalog)。
 - **安全注记**: urllib 跟随 302 不校验 redirect host —— 白名单只约束提交的初始 URL。镜像域名本身受控(MS/HF-mirror 不会跳到任意内网), 风险有限; `127.0.0.1` 白名单仍是设计内唯一回环口(有网环境 smoke 除外)。
-- sd-turbo 的 `sha256` **未填**: 宿主缓存(HF 版, sha=6b33199d…)仅作参考锚; 等真机从 MS 源下载后对设备文件校验一致再补(防"MS 版≠HF 版"时误杀)。
+- sd-turbo 的 `sha256` **未填**(2026-09-12 口径更新):主源已换 hf-mirror 的 **fp16 版**(patch 21,
+  2.6GB),与最初的 MS fp32 版**不是同一个文件**,旧参考锚(6b33199d…,对应 HF fp32)随之失效。
+  补档须以当前主源实际下载到的文件为准;`sha256` 是可选参数,留空不影响下载与入库
+  (catalog 条目目前均未填,设计如此)。
 
 **P0.4 catalog 扩充(2026-09-11, `patches/22-ohos-catalog-expand.patch`)**: 用户拍板
 「<12GB 条目可试」→ 新增 7 条: SDXL 1.0(MS 6.94GB)、sdxl-vae(hf-mirror 334MB)、
@@ -61,7 +64,7 @@ fetch 链 ③h 幂等 apply + 证据串 `OHOS_DL_CATALOG_EXPAND v1`; 从零重�
 
 ## 4. P1 远程算力 API(W4 立项)
 
-已定稿 [external-api-node-design.md](external-api-node-design.md): 自研 `OHOS_API_Image`/`Text`/`HTTP` 节点组, 输出**标准 IMAGE**(可直接接 PreviewImage/SaveImage/原生下游), 零新依赖(requests/PIL 均在栈内), 社区节点只借鉴设计不背依赖。服务商适配层: 硅基流动(FLUX/SDXL)、阿里百炼(万相)。配套: API 密钥设置页(系统 keystore)+ 本地/云双模自动路由(本地能跑→本地; 否则提示一键转云)。**前置: P0 真机验收**。
+已定稿 [external-api-node-design.md](external-api-node-design.md): 自研 `OHOS_API_Image`/`Text`/`HTTP` 节点组, 输出**标准 IMAGE**(可直接接 PreviewImage/SaveImage/原生下游), 零新依赖(requests/PIL 均在栈内), 社区节点只借鉴设计不背依赖。服务商适配层: 硅基流动(FLUX/SDXL)、阿里百炼(万相)。配套: API 密钥设置页(系统 keystore)+ 本地/云双模自动路由(本地能跑→本地; 否则提示一键转云)。~~**前置: P0 真机验收**~~ → **✅ 前置已满足(2026-09-10),W4 可立项;动工前注意设计文档的 patch 编号已修正为 `23` / fetch 段 `③i`。**
 
 ## 5. 量化立场
 
