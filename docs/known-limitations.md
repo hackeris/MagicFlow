@@ -12,7 +12,8 @@
   之后启动会快一些,但仍属固定成本。
 - **纯 CPU 推理**。矩阵运算走 OpenBLAS(12 线程)。NPU 路线已验证不可行并终止:设备侧
   NNRt 不支持卷积算子,而卷积是 SD 出图的算力主体,端到端加速不成立 —— 结论与验证
-  过程见 `../poc/npu/README.md` 顶部的修正说明。
+  过程见 `npu-poc` 分支的 `poc/npu/README.md` 顶部修正说明(完整实现与
+  `docs/npu-backend-roadmap.md` 同在该分支)。master 上相关探针已于 2026-09-12 全部移除。
 
 ## 模型
 

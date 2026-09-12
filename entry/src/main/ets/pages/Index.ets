@@ -1,4 +1,4 @@
-import { startComfyChild, npuEnumerate, npuRunAddGraph, npuRunOfflineModelBuffer } from 'libentry.so';
+import { startComfyChild } from 'libentry.so';
 import { ensureStdlib } from '../utils/Stdlib';
 import { ensureModels, getModelsRoot, modelPath } from '../utils/ModelsDir';
 import { ImageSaveClient } from '../utils/ImageSave';
@@ -6,8 +6,6 @@ import { fileIo } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { webview } from '@kit.ArkWeb';
 import { http } from '@kit.NetworkKit';
-// P0 对照探针(2026-09-06, 临时): MindSporeLite Kit 的 ArkTS 侧 NNRt 设备可见性
-import { mindSporeLite } from '@kit.MindSporeLiteKit';
 
 const DOMAIN = 0xD001;
 const TAG = 'ComfyUI';
@@ -107,65 +105,13 @@ struct Index {
   steps: string[] = ['准备运行环境', '启动后端子进程', '装载核心组件', '后端就绪'];
   narrs: string[] = ['初始化运行时组件…', '注册模型与扩展…', '准备推理引擎…', '联机后端检查…'];
 
-  // P0 自动探针(2026-09-06, 用户要求「启动即探」; 验证后删): 页面出现即执行, 不再
-  //   挂在「启动」按钮; 探针只做枚举/构图执行, 不启动后端、不动网络 —— 零自动启动语义不受影响。
-  //   结果: filesDir/npu-probe-ark.log(TRUNC 覆盖写, hdc 只读可拉)。
+  // 零自动启动: 打开 App 只挂图片保存桥, 不拉起子进程/解压/装载 —— ps 无 comfy_child 可证。
+  //   (P0 NPU 探针 2026-09-12 随 NPU 路线终止一并移除: 它曾在首帧前同步跑 NNRt 构图编译,
+  //    推迟首页渲染; 完整探针归档在 npu-poc 分支)
   aboutToAppear(): void {
     // 图片下载桥(2026-09-08): 前端图片"下载"按钮经此保存到用户选择的位置
     if (this.imageSaveClient === null) {
       this.imageSaveClient = new ImageSaveClient(getContext(this));
-    }
-    const arkLog = `${getContext(this).filesDir}/npu-probe-ark.log`;
-    const arkWrite = (msg: string): void => {
-      try {
-        const fd = fileIo.openSync(arkLog, fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC
-          | fileIo.OpenMode.WRITE_ONLY);
-        fileIo.writeSync(fd.fd, msg);
-        fileIo.closeSync(fd);
-      } catch (_) { /* ignore */ }
-    };
-    // ① MindSporeLite Kit(ArkTS 官方链)设备可见性
-    try {
-      const ds = mindSporeLite.getAllNNRTDeviceDescriptions();
-      let s = `ark npu-probe: count=${ds.length}\n`;
-      for (const d of ds) {
-        s += `  dev name=${d.deviceName()} type=${d.deviceType()}\n`;
-      }
-      // ② 父进程 C API(与子进程同库同调用方式)对照
-      try {
-        s += `napi npu-p1: ${npuEnumerate()}\n`;
-      } catch (e2) {
-        s += `napi npu-p1 EX: ${JSON.stringify(e2)}\n`;
-      }
-      // ②' 官方 Add 单算子构图→编译→执行链(2026-09-06 HAP 内形态; 结果 TRUNC 覆盖写)
-      //   2026-09-06 源码定谳: Build 必须先 SetCache(缓存目录 App 可写) → 传 filesDir/nncache
-      try {
-        const nnCacheDir = `${getContext(this).filesDir}/nncache`;
-        fileIo.mkdirSync(nnCacheDir, true);
-        s += `napi npu-run-add:\n${npuRunAddGraph(nnCacheDir)}\n`;
-        // ③ 离线模型执行(Buffer 版, 2026-09-07): rawfile → ConstructWithOfflineModelBuffer,
-        //   免拷贝; 异步执行完成后回填 npu-offline.log(TEST_DONE 通道)。
-        const offlLog = `${getContext(this).filesDir}/npu-offline.log`;
-        const offlWrite = (msg: string): void => {
-          try {
-            const fd = fileIo.openSync(offlLog, fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC
-              | fileIo.OpenMode.WRITE_ONLY);
-            fileIo.writeSync(fd.fd, msg);
-            fileIo.closeSync(fd);
-          } catch (_) { /* ignore */ }
-        };
-        getContext(this).resourceManager.getRawFileContent('custom_graph.omc').then((buf: Uint8Array) => {
-          const r: string = npuRunOfflineModelBuffer(buf, nnCacheDir);
-          offlWrite(`napi npu-offline-buf:\n${r}\n`);
-        }).catch((e5: Error) => {
-          offlWrite(`napi npu-offline-buf: rawfile-missing EX ${JSON.stringify(e5)}\n`);
-        });
-      } catch (e3) {
-        s += `napi npu-run-add EX: ${JSON.stringify(e3)}\n`;
-      }
-      arkWrite(s);
-    } catch (e) {
-      arkWrite(`ark npu-probe EX: ${JSON.stringify(e)}`);
     }
   }
 
@@ -213,8 +159,6 @@ struct Index {
       await ensureModels(actx, pyroot);
       this.phase = 2;
       this.status = '启动后端子进程…';
-      // 诊断口(默认关闭): entryParams 补 "|npu-probe" 可让子进程跑 NNRt 探针
-      //   (写入 <pyroot>/npu-probe.log; 探针含 6×5s 重试, 平时绝不能开 —— P0 实证)
       const entryParams = `phase0|127.0.0.1|8188|--cpu|pyroot=${pyroot}`;
       this.pid = startComfyChild(entryParams);
       this.phase = 3;

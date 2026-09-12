@@ -30,9 +30,8 @@
 /externals
 /entry/src/main/cpp/prebuilt
 /entry/src/main/resources/rawfile/python312.zip
-# rawfile 其余物也全为构建/探针产物（bin/ 空目录、custom_graph.omc 为 poc 探针物）
+# rawfile 其余物也全为构建产物（bin/ 空目录）
 /entry/src/main/resources/rawfile/bin
-/entry/src/main/resources/rawfile/custom_graph.omc
 # 注: thirdparty/safetensors|tokenizers 是已登记的 submodule(gitlink), 勿当作临时克隆处理
 /stub/__pycache__
 /scripts/__pycache__

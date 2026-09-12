@@ -1224,8 +1224,6 @@ static void dlopen_python_check(const char *entryParams)
     LOGI("libpython dlopen+init done (torch __1 stack verified)");
 }
 
-int npu_probe_run(const char *pyroot);   // npu_probe.cpp: P0 NNRt 探针(见 Main 内注释)
-
 extern "C" void Main(NativeChildProcess_Args args)
 {
     // ★ 诊断降级：在一切动作前把 stderr/stdout freopen 到 <pyroot>/diag.log（app sandbox，hdc 可读），
@@ -1258,13 +1256,6 @@ extern "C" void Main(NativeChildProcess_Args args)
     LOGI("Main ENTER pid=%{public}d entryParams=%{public}s",
          (int)getpid(), args.entryParams ? args.entryParams : "(null)");
     DIAG("Main ENTER pid=%d entryParams=%s", (int)getpid(), args.entryParams ? args.entryParams : "(null)");
-
-    // P0 端侧 NNRt 探针(2026-09-06): entryParams 含 "npu-probe" 时先跑 NNRt 动态构图
-    //   ADD 算子(见 npu_probe.cpp; 结果落 <pyroot>/npu-probe.log + diag.log)。诊断模式,
-    //   无标记则零影响 —— 后续 torch NPU 后端立项的「真机 NNRt 可用」判据就靠它。
-    if (args.entryParams && strstr(args.entryParams, "npu-probe")) {
-        npu_probe_run(diagproot);
-    }
 
     cpu_baseline();     // 不确定点④：CPU 基线
     fork_exec_check();  // 不确定点②：子进程池 fork/exec

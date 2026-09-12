@@ -93,8 +93,9 @@ rustc 1.98.0(`aarch64-unknown-linux-ohos`)/ Node.js 25。
 - **部分节点不可用**:为控制安装包体积,少数使用频率低的依赖没有打包,对应的
   视频、图像预处理等节点无法使用;
 - **暂不支持 NPU / GPU 加速**:当前为纯 CPU 推理。NPU 路线已验证不可行 —— 设备侧 NNRt
-  不支持卷积算子,而卷积是出图的算力主体,端到端加速不成立(验证记录见
-  [poc/npu/README.md](poc/npu/README.md) 顶部的修正说明)。
+  不支持卷积算子,而卷积是出图的算力主体,端到端加速不成立(验证记录见 `npu-poc`
+  分支的 `poc/npu/README.md` 顶部修正说明;完整实现与路线图同在该分支)。
+  2026-09-12 已把相关探针从 master 全部移除。
 
 以上限制的原因、数据与完整清单见 [docs/known-limitations.md](docs/known-limitations.md)。
 

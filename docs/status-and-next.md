@@ -18,7 +18,8 @@
 | **P0 模型获取国产化**(catalog 12 条,国内镜像直连) | `docs/comfyui-cn-cloud-strategy.md` §2-3;patch 18-22 |
 | 品牌更名(梦幻之流 / MagicFlow) | bundleName=`app.fuqidian.magicflow`(2026-09-07) |
 | 图片保存(ArkWeb 桥 + picker 另存) | commit 6cfa2f0 |
-| **NPU 可行性验证 → 结论:不可行,路线终止** | `poc/npu/README.md` **顶部的修正说明**(原"33/34 算子 PASS"已证伪) |
+| **NPU 可行性验证 → 结论:不可行,路线终止** | `npu-poc` 分支的 `poc/npu/README.md` **顶部修正说明**(原"33/34 算子 PASS"已证伪) + `docs/npu-backend-roadmap.md` |
+| master 侧 NPU 残留清理 | 2026-09-12: 探针源文件/napi 导出/POC 工程/rawfile 探针物全部移除 |
 
 ## 2. 设备能力上限定谳
 
