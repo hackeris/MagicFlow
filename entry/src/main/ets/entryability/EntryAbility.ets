@@ -1,4 +1,4 @@
-import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ensureStdlib } from '../utils/Stdlib';
@@ -9,6 +9,18 @@ const TAG = 'ComfyUI';
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, TAG, 'EntryAbility onCreate');
+    // 2026-09-12 应用级强制深色(参照 ../wineohos EntryAbility.onCreate): 让**系统提供的
+    //   UI 组件**(窗口标题栏等)走深色, 与应用自身的深空界面协调。
+    //   ★ 本应用自己画的 UI 颜色全部是硬编码(Index.ets 的 47 处), **不引用系统颜色资源**
+    //     ⇒ 观感不受本设置影响(这是刻意的: 只改系统组件, 不动应用 UI)。
+    //   ★ 启动窗口由系统在**进程起来之前**显示, 那时本调用还没执行 ⇒ 启动窗口的背景另由
+    //     resources/{base,dark}/element/color.json 的 start_window_background 负责, 两处缺一不可。
+    try {
+      this.context.getApplicationContext().setColorMode(
+        ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'setColorMode(DARK) failed: %{public}s', JSON.stringify(e));
+    }
     // Step 0.2：唯一解压点 —— rawfile 里的 stdlib(python312.zip) 拷到 filesDir，解压成
     // <filesDir>/pyroot/lib/python3.12/ 目录树供子进程 Py_Initialize。fire-and-forget；
     // 页面侧经 ensureStdlib 拿到同一单例 Promise 再 await，任何地方都不会并发重复准备。
