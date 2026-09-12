@@ -57,9 +57,66 @@
 - `body` 支持占位符 `{{prompt}}`、`{{seed}}`、`{{width}}`、`{{height}}`、`{{temperature}}` 等:**由节点生成的纯 dict 模板`(write 模式)或由上游 TEXT 输入拼入`(read 模式)** . 简化:v1 只做「静态 json str + 标准化 `{{...}}` 替换 + 参数 widget」,不做上游 TEXT 输入二次拼串(上游 TEXT 可先经官方 `nodes_text.py` 的 WriteText/ConcatText 节点拼接成模板?——不,v1 采用「上游 TEXT → body 整体作为 prompt field」,即 `body` 模板中 `{{prompt}}` 由 widget 或上游 TEXT 填充,二者择一)。
 - 参数化 widget:顶部 `params` json str(默认 `{}`),与 `body` 模板双替。简化到:模板顶层字段 `meta`(任意 json)+ `prompt` 可选专列。
 
+**⚠ 占位符铁律(2026-09-12 真机实锤,踩过)**:`render_template` 把 `{{name}}` 替换为
+**JSON 字面量**(字符串自带引号)⇒ **占位符只能作独立 JSON 值(裸写)**:
+- ✅ `"content": {{prompt}}` → `"content": "你好"`
+- ❌ `"content": "{{prompt}}"` → `"content": ""你好""`(双引号嵌套 = 非法 JSON,打真实 API 必 400)
+- ✅ 需**嵌入字符串**时由 Python 侧**整值组装**再传入:默认 headers 用 `{{auth_header}}`
+  (= `"Bearer <key>"` 的字面量),而**不是** `"Bearer {{api_key}}"`。
+- 守卫:`scripts/smoke_external_api.py` 的 [1b] 段对三个默认模板断言「渲染后 `json.loads` 必成功」
+  (取节点模块真身,非副本);`scripts/mock_api_server.py` 对 JSON 请求体做非法即 400 的校验。
+
 **实际上 v1 收敛**:任意 API 差异太大,所以
 - `OHOS_API_Text`/`OHOS_API_Image` 提供 **OpenAI 兼容模式的甜蜜路径**:内建 `chat completions`/`images/generations` 模板,外加 `custom json 模板`模式(完整 JSON str,widget 填写,模板支持 `{{prompt}}` 等 4 个占位符)。
 - `OHOS_API_HTTP` 纯通用:method/url/headers/body 全显式,无甜蜜路径,响应按 `format` 处理。
+
+---
+
+## 1.5 密钥存储与双模路由(2026-09-12 W4 实施时定型)
+
+两处都偏离了原设计,理由如下。
+
+### 密钥:自研端点 + 掩码,不走 ComfyUI 原生 settings
+
+原设计(§5 风险 b)把密钥留给「节点 widget 常规」或「二期 settings 下拉」。实施前核实了两条:
+
+1. **原生 settings 在设备上不可靠**:`make_comfyui_stage.py:91` 的 `SRC_ROOT_ONLY` 排除根级
+   `user/` 目录,`comfy.settings.json` 的落盘路径不稳;
+2. **widget 明文会随工作流外泄**:widget 值存在 workflow json 里,分享工作流即泄漏密钥。
+
+**落地形态**(随 patch 23 一起进 server.py,与 patch 16 的 `@routes` 闭包同构):
+
+| 端点 | 行为 |
+|---|---|
+| `GET /api/ohos/apikeys` | **只回掩码**(如 `sk-***abc`),不下发明文 |
+| `POST /api/ohos/apikeys` | 写入 `<comfyui根>/api_keys.json`(权限 0600) |
+
+- 节点(`api_client.py`)与存储**同进程**,直读该文件 —— 存与用在同侧,无跨层耦合;
+- 节点参数只写**服务商名**(如 `siliconflow`),不写密钥本身 ⇒ **工作流 json 里没有秘密**。
+
+### 双模路由:只派生,不改写
+
+原设计(端云策略 §4)提「本地能跑→本地;否则提示一键转云」,未定形态。**定为「派生新工作流」**:
+
+- 判定「本地跑不动」两条(均可从 workflow json 静态读出,无需试跑):
+  1. 引用的 checkpoint 不在本地模型库(查 `/object_info` 的 `ckpt_name` 候选);
+  2. `EmptyLatentImage` 的宽或高 > **256**(本机实测上限,见 status-and-next §2)。
+- 命中 → 画布顶部提示条 + 「☁ 转为云端工作流」命令;
+- 点击 → **新建**一个工作流页签:`CheckpointLoader → KSampler → VAEDecode` 链替换为单个
+  `OHOS_API_Image`(prompt 取自 `CLIPTextEncode`,尺寸取自 `EmptyLatentImage`)。
+
+**为什么不改写原图**:改写不可逆;且本地链(步数/采样器/CFG)与云 API(单次请求)的语义无法
+一一对应,强行映射会产出错误的工作流。
+
+### 密钥页零前端改动(实施前核实的关键事实)
+
+custom node 导出 `WEB_DIRECTORY` 后,其 JS 会被前端**自动加载**:`nodes.py:2286-2289` 收集 →
+`server.py:774` 的 `/extensions/<name>` 静态路由 + `/extensions` 列表端点 → 前端执行;
+`src/types/comfy.ts:124-126` 的 `ComfyExtension.settings?: SettingParams[]` 允许扩展直接把
+设置项注册进设置菜单。
+
+⇒ **不需要改前端 fork、不需要重建 dist、不需要升 pin 双锚** —— 本设计 §0.1「不抄前端 web
+扩展」的原意是「节点声明无需前端扩展」(仍然成立),而**设置页 UI** 恰好可以用它零成本落地。
 
 ---
 
@@ -72,7 +129,14 @@
    - patch 幂等:同 15(文件存在即 skip;部分存在则逐文件 apply)。
 2. `scripts/fetch_externals.sh` 新段 **③i**(现行段落已排到 ③h/patch 22):patch 23 应用(逐 patch 幂等,失败必死)逻辑——与 ③c/③b 完全同构。
 3. `scripts/make_py312_zip.py`/`make_comfyui_stage.py`:**无需改**——`custom_nodes/` 目录已在 SRC_ROOT_ONLY 之外(copytree 全部),stage 已含(现有 ohos_smoke 验证),zip 自动收。
-4. zip 重新构建 → `python312.zip` **内容锚必变**(新增 3 文件/6 条 pyc + mtime)→ 更新 `pins.tsv` 的 `python312.zip` 行锚(三步走:重建 → make_py312_zip.py 校验 → 更新 tsv 行;漂移字段 zip_sha256 同现行为,`sorted_namelist`+`per_entry` 双锚也需同步)。
+4. zip 重新构建 → 更新 `pins.tsv` 的 `python312.zip` 行。**强制比对已落地**(2026-09-12):
+   `make_py312_zip.py` 重建后校验锚, 不符且未 `--bless` 即 **exit 2**(`make zip` 直接报错),
+   不再依赖口头纪律。三锚语义与感知边界:
+   - `sorted_namelist_sha256`(pins 第 4 列):**只感知条目集合** —— 实测只改文件内容时它原地不动;
+   - `size`(pins 第 5 列):辅助,**抓不住等长替换**;
+   - `per_entry_sha256`(manifest.gz):感知内容 —— 补强为与**入库 manifest** 比对, 专堵
+     「内容变了但前两锚都没反应」的缝隙。
+   - 更新方式:`python3 scripts/make_py312_zip.py --bless`(自动写回第 4/5 列)。
 5. `scripts/verify_smoke.sh` 新增判据(见 §4 验证矩阵)。
 
 **前端**:无需任何改动——后端 `/object_info` 自动提供节点定义,前端 canvas 通用渲染。与前端 fork 的差异仅:节点名/描述用中文放 `locales`?——不,v1 不做前端 i18n,节点 DISPLAY_NAME 用中文(后端侧 `NODE_DISPLAY_NAME_MAPPINGS`),canvas 直接显示。
@@ -83,7 +147,10 @@
 
 - **Python 3.12.7 aarch64-ohos**(栈):requests(纯 py)+ urllib3(纯 py)+ PIL(纯 py,C 加速件走 .so 剔除自动降级)+ torch/numpy(已载)。
 - **network**:INTERNET 权限已有(module.json5);HTTPS 使用 `libssl.so.3`(已在 prebuilt_manifest)+ `_ssl` dynload ✓。
-- **DNS/出网**:与 W3 下载同款约束——设备 nns 网关可达则由节点直连;不可达时经 rport 隧道(已有隧道先例:模型下载 Q2 用 `127.0.0.1:18080→宿主 18001`;**节点 URL 同样支持 127.0.0.1 + rport 反向隧道**,验证矩阵 Q2e 用)。
+- **DNS/出网**:与 W3 下载同款约束——设备 nns 网关可达则由节点直连;不可达时经 rport 隧道。
+  ⚠ **端口分工(2026-09-12 实测)**:设备 `18080 → 宿主 18001` 已被**模型下载源**占用
+  (`/tmp/models` 的 http.server,W3 起常驻,不可占用);W4 的 mock 另开
+  **设备 `18081` → 宿主 `18002`**(`scripts/smoke_api_nodes.py` 自建),两条隧道互不干扰。
 - **内存**:单请求 dict/json 解析,数十 KB~MB;响应 base64 图像 decode 有瞬时放大(4x),tiny 设备注意 `max_response_bytes` 守卫(widget,默认 20MB,超限报错)。
 
 ---
@@ -97,7 +164,7 @@
 | Q0(真机) | 节点注册 | `/object_info` 含 `OHOS_API_Text|OHOS_API_Image|OHOS_API_HTTP`,NODE_DISPLAY 中文名可见 |
 | Q1(真机) | smoke workflow:Text 节点 → 模拟器(rport 隧道) | 出 TEXT 正确;`history` outputs |
 | Q2(真机) | Image 节点 → 模拟器 base64 图 | SMOKE 出图;按 API 大小/类型正确;下游 PreviewImage 可见 |
-| Q2e(真机) | rport 隧道路径 | `OHOS_API_*` 直接调 `http://127.0.0.1:18080/...`(同模型下载)成功 |
+| Q2e(真机) | rport 隧道路径 | `OHOS_API_*` 直接调 `http://127.0.0.1:18081/...`(W4 专用隧道 → 宿主 18002)成功 |
 | Q3(真机) | HTTP 通用节点:GET 任意 json(带 header) | 双输出 TEXT+JSON;响应头/错误处理正确 |
 | Q4(真机) | 错误路径:404/超时/非 json 响应 | 节点报错信息可读(HTTP 状态码 + body 前 200 字),不死机 |
 | R(全量) | `make verify`(原判据全过 + 新判据) | 现行 `scripts/verify_smoke.sh` 有 10 条判据,加本表 4 条后为 14 条 |
@@ -129,17 +196,23 @@
         ┌───────────┴────────────┐
         │ 设备外网可直连          │ 不可达
         ▼                        ▼
-  https://api.xxx.com     http://127.0.0.1:18080(rport)→宿主模拟器
+  https://api.xxx.com     http://127.0.0.1:18081(rport)→宿主 18002 mock
 ```
 
 ---
 
-## 7. 实施清单(按序)
+## 7. 实施清单(按序; ✅ = 2026-09-12 全部完成)
 
-1. patch 23 编写(3 文件,含证据串)+ 文档本文件自查(每节真实)。
-2. fetch_externals.sh ③i:patch 23 幂等段(逐文件删除补齐同构)+ 死签。
-3. 重建 zip(for real,stage→make_py312_zip)→ tsv 锚更新。
-4. H0/H1 宿主冒烟。
-5. Q0-Q4 真机;修。
-6. verify_smoke.sh 判据扩展 + 重编 `OHOS_API_*` 判据(R 轮全量)。
-7. memory:V2 前景文档落格(本设计要点)到 `comfyui-stack-build-decision.md`?不,memory 已有 P0 位,新建 `comfyui-external-api-node.md` one-liner hook。
+1. ✅ patch 23(`patches/23-ohos-external-api.patch`: 4 个节点文件 + server.py 密钥端点,
+   证据串 `# OHOS_EXTERNAL_API v1`)。
+2. ✅ `fetch_externals.sh` ③i 幂等段; 证据串补进 `ohos_patch_applied()`(堵「证据齐但缺节点」快捷路径漏洞)。
+3. ✅ 重建 zip + 锚更新(`f4041590…` / 213,665,992B): **强制比对**(不符即 exit 2)+
+   **per_entry 缝隙补强**(抓「等长内容替换」—— sha/size 双双失明的场景, 已构造实证)。
+4. ✅ H0/H1 宿主冒烟 `scripts/smoke_external_api.py`(ALL GREEN, 含三默认模板「渲染后 json.loads 必成功」断言)。
+5. ✅ Q0–Q6 真机(设备 1.5): `verify_smoke.sh` 12 项 ALL PASS + `scripts/smoke_api_nodes.py`
+   11 项 ALL GREEN(含 Q5b 密钥闭环、Q4 三错误路径 + 后端不死); Q6 用
+   `scripts/smoke_routing_judge.js` 从 `api_keys.js` 真身抽函数单测。
+   **代价**: 本轮修出并实证一个产品级缺陷 —— 默认模板占位符写在引号内(见 §1「占位符铁律」)。
+6. ✅ `verify_smoke.sh` 判据扩展(默认 12 条 / MODEL_DL=1 时 14 条) + 端口参数化(`--port`)+
+   门户驱导改轮询(装机首启假失败)。
+7. ✅ memory 落格 `comfyui-w4-external-api`。

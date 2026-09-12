@@ -837,12 +837,95 @@ def main():
         mdir = os.path.join(ROOT, "docs/manifests")
         os.makedirs(mdir, exist_ok=True)
         mpath = os.path.join(mdir, "python312.zip.manifest.gz")
+        # 缝隙补强(2026-09-12 实测触发): sorted-namelist **只感知条目集合**, 与 size 一起
+        #   也抓不住"等长内容替换"(实测: 只改 nodes.py 内容时 sorted 锚原地不动, 仅 size
+        #   +464 兜住 —— 若改动恰好等长就双双失明)。故写盘前先读**上一次入库 manifest**
+        #   的 per_entry 摘要, 内容变了就必须走 bless, 不给"改了却没人知道"留缝。
+        _old_per_entry = None
+        if os.path.exists(mpath):
+            try:
+                with gzip.open(mpath, "rb") as mf:
+                    _old_per_entry = _json.loads(mf.read()).get("per_entry_sha256")
+            except Exception:
+                _old_per_entry = None  # 旧 manifest 损坏/格式旧 → 不阻断, 退化为只看 sha/size
         with open(mpath, "wb") as mf:
             mf.write(gzip.compress(_json.dumps(mani, sort_keys=True).encode()))
         print(f"  [OK] manifest 写 {mpath}")
         print(f"  [MANIFEST] entries={len(entries)} sorted_namelist_sha256={sorted_hash} "
               f"zip_size={os.path.getsize(OUT)}")
+
+        # 2026-09-12 W4-S4 — pins.tsv 强制比对: 把设计文档 §5e 声称的「锚未更新 → make 报错」
+        #   真正落地。此前 check_zip_anchor 只 warn、且读的是 manifest 而非 zip ⇒ 锚漂移
+        #   (实例: NPU 残留 _nnrt_bootstrap dist-info 两条) 一路静默。锚不符即 exit 2。
+        got_size = str(os.path.getsize(OUT))
+        row = _pins_row(PINS_NAME)
+        if row is None:
+            print(f"  [WARN] pins.tsv 无 {PINS_NAME} 行, 跳过锚比对: {PINS}", file=sys.stderr)
+        elif len(row) < 5:
+            print(f"  [WARN] pins.tsv 的 {PINS_NAME} 行不足 5 列, 跳过锚比对", file=sys.stderr)
+        else:
+            want_sha, want_size = row[3], row[4]
+            content_changed = (_old_per_entry is not None and _old_per_entry != per_entry)
+            if want_sha == sorted_hash and want_size == got_size and not content_changed:
+                print(f"  [OK] pins.tsv 锚一致 (sha={sorted_hash[:16]}… size={got_size})")
+            elif BLESS:
+                if _pins_bless(PINS_NAME, sorted_hash, got_size):
+                    print(f"  [BLESS] pins.tsv 已更新 → sha={sorted_hash[:16]}… "
+                          f"size={got_size} (旧 sha={want_sha[:16]}… size={want_size})"
+                          + ("｜内容有变(per_entry)" if content_changed else ""))
+                else:
+                    print(f"  [FAIL] --bless 未找到 {PINS_NAME} 行, 无法写回", file=sys.stderr)
+                    return 2
+            else:
+                print(f"  [FAIL] pins.tsv 锚未更新 —— zip 已变但 pin 未同步"
+                      + ("(内容变/条目集合未变, 仅 per_entry 可辨)" if content_changed else "")
+                      + f"\n         want sha={want_sha[:16]}… size={want_size}\n"
+                      f"         got  sha={sorted_hash[:16]}… size={got_size}\n"
+                      f"         → 跑 `python3 scripts/make_py312_zip.py --bless` 更新后重试",
+                      file=sys.stderr)
+                return 2
     return 0
+
+
+# ── pins.tsv 读写(2026-09-12 W4-S4) ─────────────────────────────────────────────
+# 格式(制表符分隔): name<TAB>type<TAB>url<TAB>sha256<TAB>size<TAB>note
+#   anchor 型行的 sha256 列 = sorted-namelist sha256(确定性锚), size 列 = zip 字节数。
+PINS = os.path.join(ROOT, "config/externals.pins.tsv")
+PINS_NAME = "python312.zip"
+BLESS = "--bless" in sys.argv
+
+
+def _pins_row(name):
+    """读 tsv 中 name 所在行 → list[str](列); 无此行/文件缺失返回 None。"""
+    try:
+        with open(PINS, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith(name + "\t"):
+                    return line.rstrip("\n").split("\t")
+    except FileNotFoundError:
+        return None
+    return None
+
+
+def _pins_bless(name, sha, size):
+    """把 name 行的第 4/5 列(sha256/size)改写为实测值, 其余列原样保留。"""
+    try:
+        with open(PINS, encoding="utf-8") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return False
+    hit = False
+    for i, line in enumerate(lines):
+        if line.startswith(name + "\t"):
+            cols = line.rstrip("\n").split("\t")
+            cols[3], cols[4] = sha, size
+            lines[i] = "\t".join(cols) + "\n"
+            hit = True
+    if not hit:
+        return False
+    with open(PINS, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+    return True
 
 
 if __name__ == "__main__":

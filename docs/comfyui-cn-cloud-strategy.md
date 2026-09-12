@@ -64,7 +64,21 @@ fetch 链 ③h 幂等 apply + 证据串 `OHOS_DL_CATALOG_EXPAND v1`; 从零重�
 
 ## 4. P1 远程算力 API(W4 立项)
 
-已定稿 [external-api-node-design.md](external-api-node-design.md): 自研 `OHOS_API_Image`/`Text`/`HTTP` 节点组, 输出**标准 IMAGE**(可直接接 PreviewImage/SaveImage/原生下游), 零新依赖(requests/PIL 均在栈内), 社区节点只借鉴设计不背依赖。服务商适配层: 硅基流动(FLUX/SDXL)、阿里百炼(万相)。配套: API 密钥设置页(系统 keystore)+ 本地/云双模自动路由(本地能跑→本地; 否则提示一键转云)。~~**前置: P0 真机验收**~~ → **✅ 前置已满足(2026-09-10),W4 可立项;动工前注意设计文档的 patch 编号已修正为 `23` / fetch 段 `③i`。**
+已定稿 [external-api-node-design.md](external-api-node-design.md): 自研 `OHOS_API_Image`/`Text`/`HTTP` 节点组, 输出**标准 IMAGE**(可直接接 PreviewImage/SaveImage/原生下游), 零新依赖(requests/PIL 均在栈内), 社区节点只借鉴设计不背依赖。服务商适配层: 硅基流动(FLUX/SDXL)、阿里百炼(万相)。配套: API 密钥设置页 + 本地/云双模自动路由(本地能跑→本地; 否则提示一键转云)。~~**前置: P0 真机验收**~~ → **✅ 前置已满足(2026-09-10),W4 可立项;动工前注意设计文档的 patch 编号已修正为 `23` / fetch 段 `③i`。**
+
+**实施(2026-09-12)**: `patches/23-ohos-external-api.patch` + fetch 段 ③i。两处与原设计的偏离
+(已在设计文档 §1.5 记明理由): ① 密钥**不走系统 keystore**, 改自研端点
+`GET/POST /ohos/apikeys`(GET 只回掩码, 存储 `<comfyui根>/api_keys.json` 0600)—— 原生
+settings 在设备上落盘路径不可靠(`make_comfyui_stage.py:91` 排除根级 `user/`), 且 widget
+明文会随工作流 json 外泄; ② 双模路由定为**派生新工作流**(不改写原图, 改写不可逆)。
+前端零改动: custom node 导出 `WEB_DIRECTORY` 即被前端自动加载(`nodes.py:2286` →
+`/extensions/<name>` 静态路由), 设置项经 `ComfyExtension.settings` 注册 ⇒ 不必重建 dist、
+不必升 pin。宿主冒烟 `scripts/smoke_external_api.py` ALL GREEN; `verify_smoke.sh` 判据
+10 → 14 条; zip 重建锚 `f4041590…`(35,928 条)且新增**锚不符即 exit 2** 的强制比对。
+**真机已验收(2026-09-12, 设备 1.5)**: verify 12 项 ALL PASS + mock 轮 `smoke_api_nodes.py`
+11 项 ALL GREEN(Q1–Q5b, 含「provider + 存储密钥 → Authorization」闭环与三条错误路径);
+Q6 判定逻辑由 `scripts/smoke_routing_judge.js` 覆盖。**顺带实锤并修掉一个产品级缺陷**:
+默认模板把占位符写在引号内 → 渲染出 `""你好""`(非法 JSON) —— 详见设计文档「占位符铁律」。
 
 ## 5. 量化立场
 

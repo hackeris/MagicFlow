@@ -10,26 +10,37 @@
 #   C.   出图 smoke_workflow_256x2.json: status=success 且 execution < 180s
 #     (seed 每轮随机注入(2026-09-05) → 每轮真执行、图像各异, 无缓存假成功;
 #      判据只验 success+耗时+>10KB, 不做字节断言)
-# 用法: bash scripts/verify_smoke.sh [--fast] [--device 192.168.1.8:33363] [--hap <path>]
-#   --fast   只验后端+判据 A/B(不跑出图); --device 默认 192.168.1.8:33363;
+#   W3.  catalog/模型可见/模板路由(3 条)
+#   W4.  OHOS_API_* 三节点注册 + /extensions 可见 + 密钥端点往返 2 条(2026-09-12, patch 23);
+#        ⚠ 密钥段留一条 `__smoke__` 探针条目(端点无删除语义, 无害)
+#   合计 14 条 = 默认 12 条(2026-09-12 真机实测 12 项 ALL PASS) + MODEL_DL=1 时的 2 条。
+# 用法: bash scripts/verify_smoke.sh [--fast] [--device 192.168.1.5:44959] [--port 8189] [--hap <path>]
+#   --fast   只验后端+判据 A/B(不跑出图); --device 默认 192.168.1.5:44959;
+#   --port   宿主侧 fport 端口(dev 8188 → 宿主 $PORT), 默认 8189。
+#     ⚠ 2026-09-12 实测: 宿主端口是**独占资源** —— 多台设备同时在线时, 后来的设备
+#     建同号 fport 会静默失败, 脚本随即打到别的设备/无响应(症状: 全链 FAIL 但设备侧
+#     8188 明明在听)。换 -t 换设备时若报「后端未就绪」, 先 `hdc fport ls` 看端口归属。
 #   --hap 默认 entry/build/default/outputs/default/entry-default-signed.hap
 # 输出: PASS/FAIL 逐项 + 关键数字; 任一 FAIL → exit 1。全量约 4-5 分钟。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEVICE="192.168.1.8:33363"
+DEVICE="192.168.1.5:44959"
 HAP="$ROOT/entry/build/default/outputs/default/entry-default-signed.hap"
+PORT=8189
 FAST=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --fast) FAST=1 ;;
     --device) DEVICE="$2"; shift ;;
+    --port) PORT="$2"; shift ;;
     --hap) HAP="$2"; shift ;;
     *) echo "未知参数 $1"; exit 2 ;;
   esac
   shift
 done
 HDC="hdc -t $DEVICE"
+COMFY="http://127.0.0.1:$PORT"
 DLOG=/data/app/el2/100/base/app.fuqidian.magicflow/haps/entry/files/pyroot/diag.log
 
 PASSES=0; FAILS=""
@@ -47,8 +58,7 @@ $HDC install -r "$HAP" 2>&1 | tail -1 | grep -qE "AppMod finish|success" || bad 
 $HDC shell "aa force-stop app.fuqidian.magicflow" >/dev/null 2>&1 || true
 sleep 2
 $HDC shell "aa start -a EntryAbility -b app.fuqidian.magicflow" >/dev/null 2>&1
-echo "  已启动, 等首页 UI 稳定..."
-sleep 20   # 首页首帧实测 ~15-20s(2026-09-05)
+echo "  已启动, 等首页 UI 就绪(轮询 ≤180s)..."
 
 # ── 门户驱导(2026-09-05 单入口化, docs/workspace-design.md)─────────────────
 #   产品化=零自动启动: 后端由「用户手势」触发 —— verify 以 UI 自动化执行同一手势
@@ -85,13 +95,18 @@ ui_in() { $HDC shell "uitest uiInput $*" >/dev/null 2>&1; }
 
 # 门户驱导(单入口, 2026-09-05): 点首页「启动 梦幻之流」按钮; 返回 0=已注入, 1=失败。
 #   坐标全部动态取自 uitest dumpLayout(文本节点中心), 不硬编码(抗布局微调)。
+#   ⚠ 2026-09-12 实测: 装机后**首次**启动要预编译 pyc, 首页 20s 内出不来 —— 原来固定
+#   sleep 20 会假失败("启动按钮缺失")。改为轮询按钮出现(≤180s), 首启/热启都适用。
 portal_enter() {
   # 前置: 把 App 拉回前台(硬化) —— 防用户正用别的应用时误触(2026-09-05 实判)
   $HDC shell "aa start -a EntryAbility -b app.fuqidian.magicflow" >/dev/null 2>&1
-  sleep 5
-  local NB
-  NB=$(node_center "启动 梦幻之流")
-  [ -z "$NB" ] && { echo "  portal: 首页未出现(启动按钮缺失)"; return 1; }
+  local NB="" i
+  for i in $(seq 1 36); do
+    NB=$(node_center "启动 梦幻之流" || true)
+    [ -n "$NB" ] && break
+    sleep 5
+  done
+  [ -z "$NB" ] && { echo "  portal: 首页未出现(启动按钮缺失, 轮询 ≤180s)"; return 1; }
   ui_in click $NB
   echo "  portal: 点击『启动 梦幻之流』"
   return 0
@@ -101,7 +116,7 @@ echo "== [1b] 门户驱导(单入口: 点启动) =="
 portal_enter && echo "  已注入用户手势, 等后端就绪..."
 
 # fport(宿主 8189 → 设备 8188)
-curl -s -m 4 http://127.0.0.1:8189/system_stats >/dev/null 2>&1 || hdc -t "$DEVICE" fport tcp:8189 tcp:8188 >/dev/null 2>&1 || true
+curl -s -m 4 $COMFY/system_stats >/dev/null 2>&1 || hdc -t "$DEVICE" fport tcp:$PORT tcp:8188 >/dev/null 2>&1 || true
 # rport(设备 18080 → 宿主 18001): 模型源 http.server(/tmp/models, 服务 sd_turbo)。幂等自建。
 #   ⚠ 2026-09-05: 设备侧 18000 有残留隧道监听(hdcd 持有, 宿主侧通路已断), 重建会报
 #   "TCP Port listen failed" → 改用 18080。旧 18000 残留不碍事, 仅占端口。
@@ -110,23 +125,23 @@ hdc -t "$DEVICE" rport tcp:18080 tcp:18001 >/dev/null 2>&1 || true
 backend_ok=0
 for i in $(seq 1 24); do
   sleep 10
-  if curl -s -m 5 http://127.0.0.1:8189/system_stats 2>/dev/null | grep -q comfyui; then backend_ok=1; break; fi
+  if curl -s -m 5 $COMFY/system_stats 2>/dev/null | grep -q comfyui; then backend_ok=1; break; fi
 done
-[ "$backend_ok" = 1 ] && ok "后端就绪(8189/system_stats <=240s)" || bad "后端未就绪(240s)"
+[ "$backend_ok" = 1 ] && ok "后端就绪(:$PORT/system_stats <=240s)" || bad "后端未就绪(240s, 端口 $PORT)"
 
 echo "== [2] 判据 A/B: OHOS_SmokeBench(BLAS=open + MM4x<2.0s) =="
 # 2026-09-05 黑盒化: 判据由 ComfyUI 侧自检节点执行(comfyui-src custom_nodes/ohos_smoke),
 #   结果经 history outputs.json 返回(ComfyUI 摊平结构, product 代码零探针, 见 docs/smoke-design.md)。
 BN="$ROOT/scripts/smoke_bench_workflow.json"
 [ -f "$BN" ] || { bad "缺 $BN"; }
-RESP=$(curl -s -m 15 -X POST http://127.0.0.1:8189/prompt -H 'Content-Type: application/json' --data-binary @"$BN" 2>/dev/null || echo "")
+RESP=$(curl -s -m 15 -X POST $COMFY/prompt -H 'Content-Type: application/json' --data-binary @"$BN" 2>/dev/null || echo "")
 B_PID=$(echo "$RESP" | python3 -c "import sys,json;print(json.load(sys.stdin).get('prompt_id',''))" 2>/dev/null || echo "")
 if [ -z "$B_PID" ]; then bad "bench prompt 未受理"
 else
   BJ=""
   for i in $(seq 1 10); do
     sleep 12
-    R=$(curl -s -m 8 http://127.0.0.1:8189/history/$B_PID 2>/dev/null || echo "")
+    R=$(curl -s -m 8 $COMFY/history/$B_PID 2>/dev/null || echo "")
     BJ=$(echo "$R" | python3 -c "
 import sys, json
 d = json.load(sys.stdin); h = d.get('$B_PID', {})
@@ -165,7 +180,7 @@ if [ "${MODEL_DL:-0}" = 1 ]; then
   if [ -n "$MB" ] && [ "$MB" -gt 1000000000 ]; then
     ok "Q2 目标已具备(媒体区完整模型 ${MB}B)"
   else
-    TASK=$(curl -s -m 15 -X POST http://127.0.0.1:8189/models/download \
+    TASK=$(curl -s -m 15 -X POST $COMFY/models/download \
       -H 'Content-Type: application/json' \
       --data-binary '{"url":"http://127.0.0.1:18080/sd_turbo.safetensors","directory":"checkpoints","filename":"sd_turbo.safetensors"}' 2>/dev/null || echo "")
     TID=$(echo "$TASK" | python3 -c "import sys,json;print(json.load(sys.stdin).get('task_id',''))" 2>/dev/null || echo "")
@@ -175,7 +190,7 @@ if [ "${MODEL_DL:-0}" = 1 ]; then
       FIN=""
       for i in $(seq 1 60); do
         sleep 10
-        ST=$(curl -s -m 8 "http://127.0.0.1:8189/models/download/$TID" 2>/dev/null || echo "")
+        ST=$(curl -s -m 8 "$COMFY/models/download/$TID" 2>/dev/null || echo "")
         S=$(echo "$ST" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('status',''))" 2>/dev/null || echo "")
         echo "  dl status=$S $(echo "$ST" | python3 -c "import sys,json;d=json.load(sys.stdin);print(f'{d.get(1) if False else d.get(\"bytes_received\",0)}/{d.get(\"bytes_total\",0)}')" 2>/dev/null || true)"
         [ "$S" = "completed" ] && { FIN=1; break; }
@@ -199,7 +214,7 @@ fi
 echo "== [3] W3: 模型下载端点 + 模型可见性 =="
 #   2026-09-05 W3(docs/model-download.md): patch 16 端点 catalog 可达 + extra_model_paths
 #   is_default 生效(模型树上可见 sd_turbo)。只验端点与本地可见性, 不依赖外网。
-CAT=$(curl -s -m 8 http://127.0.0.1:8189/models/download/catalog 2>/dev/null || echo "")
+CAT=$(curl -s -m 8 $COMFY/models/download/catalog 2>/dev/null || echo "")
 echo "$CAT" | python3 -c "
 import sys,json
 try:
@@ -212,7 +227,7 @@ try:
 except Exception as e: print('BAD', e)
 else: print('OK')
 " 2>/dev/null | grep -q OK && ok "W3 catalog 可达(sd-turbo + patch22 扩充, ≥12 条)" || bad "W3 catalog 不可达/缺条目: ${CAT:0:160}"
-MEL=$(curl -s -m 8 http://127.0.0.1:8189/models/checkpoints 2>/dev/null || echo "")
+MEL=$(curl -s -m 8 $COMFY/models/checkpoints 2>/dev/null || echo "")
 echo "$MEL" | python3 -c "
 import sys,json
 try:
@@ -225,7 +240,7 @@ else: print('OK')
 echo "== [4.5] W3 模板(patch 17, Q4) =="
 #   /templates/index.json 官方由 comfyui-workflow-templates pip 包提供(设备缺 → patch 17
 #   的 web.static 补上 comfyui 根 templates/)。验: 200 + 内容含 sd-turbo 模板条目。
-TMP=$(curl -s -m 8 http://127.0.0.1:8189/templates/index.json 2>/dev/null || echo "")
+TMP=$(curl -s -m 8 $COMFY/templates/index.json 2>/dev/null || echo "")
 echo "$TMP" | python3 -c "
 import sys,json
 try:
@@ -234,6 +249,54 @@ try:
 except Exception: print('BAD')
 else: print('OK')
 " 2>/dev/null | grep -q OK && ok "W3 模板路由可达(含 sd-turbo 条目)" || bad "W3 模板不可达: ${TMP:0:120}"
+
+echo "== [3.6] W4: 外部 API 节点 + 密钥端点(patch 23) =="
+#   2026-09-12 W4: OHOS_API_* 三节点注册(Q0) + 前端扩展可见(WEB_DIRECTORY 自动加载) +
+#   密钥端点往返(Q5, GET 只回掩码/绝不下发明文 —— 安全属性, 防回归)。
+#   ⚠ 本段会在设备 api_keys.json 留一条 `__smoke__` 探针条目(端点无删除语义; 该 provider
+#     名不会被任何节点使用, 无害); 每轮跑为覆盖写, 不增长。
+OI=$(curl -s -m 20 $COMFY/object_info 2>/dev/null || echo "")
+echo "$OI" | python3 -c "
+import sys,json
+try:
+    d=json.load(sys.stdin)
+    miss={'OHOS_API_Text','OHOS_API_Image','OHOS_API_HTTP'}-set(d)
+    assert not miss, f'missing {miss}'
+except Exception as e: print('BAD', e)
+else: print('OK')
+" 2>/dev/null | grep -q OK && ok "W4 节点注册(/object_info 含 OHOS_API_Text|Image|HTTP)" || bad "W4 节点未注册: $(echo "$OI" | head -c 120)"
+EXT=$(curl -s -m 8 $COMFY/extensions 2>/dev/null || echo "")
+echo "$EXT" | python3 -c "
+import sys,json
+try:
+    d=json.load(sys.stdin)
+    assert any('ohos_external_api' in str(e) for e in d)
+except Exception: print('BAD')
+else: print('OK')
+" 2>/dev/null | grep -q OK && ok "W4 前端扩展可见(/extensions 含 ohos_external_api)" || bad "W4 扩展未注册: ${EXT:0:120}"
+POST=$(curl -s -m 8 -X POST $COMFY/ohos/apikeys -H 'Content-Type: application/json' \
+  --data-binary '{"provider":"__smoke__","key":"sk-smoke-0000000000000000"}' 2>/dev/null || echo "")
+echo "$POST" | python3 -c "
+import sys,json
+try:
+    d=json.load(sys.stdin)
+    assert d.get('ok') is True, f'not ok: {d}'
+    assert d.get('masked') and d['masked'] != 'sk-smoke-0000000000000000', 'masked 泄漏明文'
+except Exception as e: print('BAD', e)
+else: print('OK')
+" 2>/dev/null | grep -q OK && ok "W4 密钥写入端点(POST 返回掩码, 非明文)" || bad "W4 密钥写入失败: ${POST:0:120}"
+KEYS=$(curl -s -m 8 $COMFY/ohos/apikeys 2>/dev/null || echo "")
+echo "$KEYS" | python3 -c "
+import sys,json
+try:
+    raw=sys.stdin.read(); d=json.loads(raw)
+    e=d.get('keys',{}).get('__smoke__',{})
+    assert e.get('configured') is True, f'探针条目缺失: {d}'
+    assert 'sk-smoke-0000000000000000' not in raw, 'GET 泄漏明文!'
+    assert set(e) <= {'configured','masked'}, f'意外字段: {e}'
+except Exception as ex: print('BAD', ex)
+else: print('OK')
+" 2>/dev/null | grep -q OK && ok "W4 密钥回读(只回掩码, 响应零明文)" || bad "W4 密钥回读异常: ${KEYS:0:120}"
 
 echo "== [4] 判据 C: 出图 =="
 if [ "$FAST" = 1 ]; then
@@ -260,7 +323,7 @@ def walk(o):
 walk(d.get('prompt', {}))
 json.dump(d, open(sys.argv[2], 'w'))
 PYEOF
-  RESP=$(curl -s -m 15 -X POST http://127.0.0.1:8189/prompt -H 'Content-Type: application/json' --data-binary @"$WF_TMP" 2>/dev/null || echo "")
+  RESP=$(curl -s -m 15 -X POST $COMFY/prompt -H 'Content-Type: application/json' --data-binary @"$WF_TMP" 2>/dev/null || echo "")
   rm -f "$WF_TMP"
   PID=$(echo "$RESP" | python3 -c "import sys,json;print(json.load(sys.stdin).get('prompt_id',''))" 2>/dev/null || echo "")
   if [ -z "$PID" ]; then bad "prompt 未受理($RESP 前 80 字: $(echo "$RESP" | head -c 80))"
@@ -268,7 +331,7 @@ PYEOF
     done_at=""
     for i in $(seq 1 12); do
       sleep 20
-      R=$(curl -s -m 8 http://127.0.0.1:8189/history/$PID 2>/dev/null || echo "")
+      R=$(curl -s -m 8 $COMFY/history/$PID 2>/dev/null || echo "")
       if echo "$R" | python3 -c "import sys,json;d=json.load(sys.stdin);h=d.get('$PID');sys.exit(0 if (h is not None and h.get('outputs')) else 1)" 2>/dev/null; then
         done_at="$R"; break
       fi

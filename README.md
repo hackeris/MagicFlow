@@ -72,7 +72,7 @@ make verify     # 9. 端到端验收: 装机 → 启动 → 矩阵运算 → 出
 | 目录 | 说明 |
 |---|---|
 | `entry/` | 鸿蒙应用工程(ArkTS 界面、NCP 子进程宿主、资源) |
-| `patches/` | ComfyUI 源码适配补丁(主补丁 + 8 个功能补丁, 含下载端点与国内镜像清单) |
+| `patches/` | ComfyUI 源码适配补丁(主补丁 + 9 个功能补丁, 含下载端点、国内镜像清单与外部 API 节点组) |
 | `scripts/` | 构建与验证脚本(构建流程入口) |
 | `thirdparty/` | 子模块:前端 fork、tokenizers、safetensors |
 | `config/` | 外部依赖版本锚点与预置库清单 |

@@ -12,7 +12,7 @@ comfyui-frontend-index.html	md5	-	641e0fec1e0c4f77676c1aead7fb210e	-	前端自�
 
 comfyui-src	git	https://github.com/comfyanonymous/ComfyUI.git	03468f4	-	commit=03468f4;clone 后 checkout,再 git apply --check patches/comfyui-src-ohos-changes.patch;apply 后 seedvr/model.py 须含 _dynamo_disable 证据串(见 fetch 脚本校验)
 
-python312.zip	anchor	-	cdf2ff1e70a73ba604df82e88ff3cf7af109bfb41c72df8f6815035807d958cf	213655656	锚=sorted-namelist sha256(确定性,2026-09-11 重建实证: 同源两次字节 sha 40b11f72/000349a0 漂移而同锚一致,故字节 sha 不作锚); 逐条目内容 sha 见 docs/manifests/python312.zip.manifest.gz(入库比对源)。演进留档: run86=28,080条/8523f5e4, run18=28,087条/151,675,300B; 2026-09-11 两次重建: ①patch22(server.py+39 行) sorted 不变 f28fdda2/size 213655682 ②前端 bef1b1d(对话框滚动修复)dist 轮转 assets 文件名 → sorted 换 cdf2ff1e/size 213655656
+python312.zip	anchor	-	f4041590e46dfd7556e05e5c4690ba8214313ff8c1ff37eae90412315ec163ac	213665992	锚=sorted-namelist sha256(确定性,2026-09-11 重建实证: 同源两次字节 sha 40b11f72/000349a0 漂移而同锚一致,故字节 sha 不作锚); 逐条目内容 sha 见 docs/manifests/python312.zip.manifest.gz(入库比对源)。演进留档: run86=28,080条/8523f5e4, run18=28,087条/151,675,300B; 2026-09-11 两次重建: ①patch22(server.py+39 行) sorted 不变 f28fdda2/size 213655682 ②前端 bef1b1d(对话框滚动修复)dist 轮转 assets 文件名 → sorted 换 cdf2ff1e/size 213655656
 
 pydantic_core-aarch64-musl.whl	url	https://pypi.org/packages/py3/p/pydantic-core/pydantic_core-2.46.5-cp312-cp312-musllinux_1_1_aarch64.whl	efd62a42486f1bda5d24cb4f63d15a3c7768375fe83d36f9417b4ad7a2fb20b3	2158408	pydantic_core Rust 内核(PyPI musllinux_1_1_aarch64,matching skh 栈);解包出 _pydantic_core...musl.so + .libs/libgcc_s-0bf60adc.so.1 走 prebuilt;本地副本 /tmp/wheels/pydantic_core-2.46.5-cp312-cp312-musllinux_1_1_aarch64.whl
 

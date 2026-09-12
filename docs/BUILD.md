@@ -11,7 +11,7 @@
 | torch(OpenBLAS 版)安装树 | `build/torch-ohos-install/` | libtorch_cpu.so ≈200MB |
 | OpenBLAS 交叉库 | `externals/openblas-src/lib/libopenblas.a` | 23.2MB |
 | Rust 扩展 | `build/rust-out/tokenizers.abi3.so`、`_safetensors_rust.abi3.so` | 秒级 |
-| python312.zip | `entry/src/main/resources/rawfile/python312.zip` | 锚见 `config/externals.pins.tsv`(现行:size=213,655,656B、sorted-namelist sha=`cdf2ff1e…`;2026-09-11) |
+| python312.zip | `entry/src/main/resources/rawfile/python312.zip` | 锚见 `config/externals.pins.tsv`(现行:size=213,665,992B、sorted-namelist sha=`f4041590…`;2026-09-12 W4 加 4 个 API 节点文件) |
 | prebuilt 库集 | `entry/src/main/cpp/prebuilt/`(325 文件闭环) | collect 断言 |
 
 ## 1. 前置依赖(机器态,一次准备)

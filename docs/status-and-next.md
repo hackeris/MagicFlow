@@ -40,19 +40,38 @@ MatePad 11.5 S / 11.8GB RAM:**稳态规格 = 256×256 级**(fp16 模型)。
 | # | 方向 | 价值 | 成本/风险 | 状态 |
 |---|---|---|---|---|
 | ① | ~~workspace 门 + 延迟启动~~ | 中(产品观感) | — | **已交付**(W1/W1.5/W1.6) |
-| ② | ~~一键 smoke(`make verify`)~~ | 中(防回归) | — | **已交付**(10 判据) |
+| ② | ~~一键 smoke(`make verify`)~~ | 中(防回归) | — | **已交付**(12 判据; 含 W4 的 4 条) |
 | ③ | ~~fp16 模型试点~~ | — | — | **已完成**,结论见 §2 |
 | ④ | ~~CANN/AscendC 试点~~ | — | — | **已被 NNRt 路线取代** |
 | ⑤ | ~~NPU 后端(NNRt / PrivateUse1)~~ | — | — | **已终止**(设备不支持卷积,见下) |
-| ⑥ | **W4:远程生图 API 节点组** | **高(体验上限)** | 中(见设计文档) | **待立项** —— 设计已定稿,前置(P0 真机验收)已完成 |
+| ⑥ | **W4:远程生图 API 节点组** | **高(体验上限)** | 中(见设计文档) | **已交付(2026-09-12)** —— 真机 Q0–Q6 全绿(verify 12 项 ALL PASS + mock 轮 11 项 ALL GREEN) |
 | ⑦ | 品牌/遥测清理 | 中(发布合规底线) | 低-中 | 待做 —— `docs/comfyui-branding-audit.md`(遥测项优先) |
 | ⑧ | 运行时基线优化(减小 2.3G 常驻) | 中(解锁 512 的唯一路径) | 高(动 torch/运行时) | 研究项,非紧急 |
 | ⑨ | workspace 规格选择 UI | 低(512 已放弃,只剩 256 提示) | 低 | 待重新定义范围 |
 
 **W4 说明**(端云策略 §4):自研 `OHOS_API_Text/Image/HTTP` 三节点,让工作流直接调第三方生图
 API,输出标准 IMAGE 张量可接原生下游;零新依赖(custom_nodes 目录机制,与 patch 15 同构)。
-设计见 `docs/external-api-node-design.md` —— ⚠ **实施前需修正该文档中的 patch 编号**
-(文中写 18,已被 `18-ohos-catalog-cn.patch` 占用,应改用 23)。
+设计见 `docs/external-api-node-design.md`(patch 编号已修正为 23 / fetch 段 ③i)。
+**2026-09-12 实施**:`patches/23-ohos-external-api.patch`(4 个节点文件 + server.py 密钥端点
+hunk, fetch 段 ③i 幂等 apply) + 后端 `GET/POST /ohos/apikeys`(GET 只回掩码,绝不下发明文;
+存储 `<comfyui根>/api_keys.json` 0600) + 前端扩展 `web/api_keys.js`(经 custom node 的
+`WEB_DIRECTORY` 自动加载 ⇒ **前端 fork 零改动**、无需重建 dist) + 宿主冒烟
+`scripts/smoke_external_api.py`(ALL GREEN) + `verify_smoke.sh` 新增 4 条判据(节点注册/扩展
+可见/密钥写读往返)。zip 锚随之更新(`f4041590…`,35,928 条)并**补上强制比对**(不符 exit 2)。
+验收止于 mock server(无真实 API key)。
+
+**真机验收(2026-09-12, 设备 1.5)**:
+- `verify_smoke.sh` 12 项 **ALL PASS**(含 W4 四条: 节点注册 / 扩展可见 / 密钥写入 / 密钥回读零明文;
+  出图 29.9s、MM4x 0.42s);
+- `smoke_api_nodes.py` **ALL GREEN**: Q1 文本 / Q2 出图为 mock 的 1×1 图 / Q3 通用 HTTP 双输出 /
+  Q4 三条错误路径可读且后端不死 / Q5b「provider + 存储密钥 → Authorization 头正确」闭环;
+- Q6 双模路由判定由 `smoke_routing_judge.js`(node, 从 `api_keys.js` 真身抽函数)覆盖, 4 例全绿;
+- 路径: 设备 `127.0.0.1:18081` → rport → 宿主 mock(18002), 与模型下载隧道(18080→18001)分离。
+
+**踩坑(已修, 留档)**: ① 默认 body/headers 模板把占位符写在引号内 → 渲染出 `""你好""`
+(非法 JSON, 打真实 API 必 400; 实锤于 mock 请求体截获) ⇒ 铁律「占位符只能作独立 JSON 值」,
+鉴权头改 `{{auth_header}}` 整值注入; ② verify 硬编码宿主端口 8189, 与另一设备的映射冲突
+→ 加 `--port`; ③ 门户驱导固定 sleep 20 在装机首启(需预编译 pyc)时假失败 → 改轮询 ≤180s。
 
 **NPU 终止原因**(2026-09-12 用户拍板):设备侧 NNRt **不支持卷积算子** ⇒ SD 出图的算力主体
 无法下沉,端到端加速不成立。全部实现与完整证据归档在 `npu-poc` 分支。

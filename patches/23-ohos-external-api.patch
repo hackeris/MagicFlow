@@ -1,0 +1,605 @@
+diff --git a/custom_nodes/ohos_external_api/__init__.py b/custom_nodes/ohos_external_api/__init__.py
+new file mode 100644
+index 0000000..725a4d6
+--- /dev/null
++++ b/custom_nodes/ohos_external_api/__init__.py
+@@ -0,0 +1,14 @@
++"""OHOS 第三方 API 节点包入口 —— ComfyUI 目录型 custom node 约定: 目录必须含 __init__.py
++(nodes.py load_custom_node 目录分支 spec_from_file_location(__init__.py))。
++
++WEB_DIRECTORY 使 web/ 下的 JS 被前端自动加载(server.py 的 /extensions/<name> 静态路由 +
++/extensions 列表端点), 用于注册 API 密钥设置项与本地/云双模路由提示 —— 无需改前端 fork。
++"""
++from .nodes import (
++    NODE_CLASS_MAPPINGS,
++    NODE_DISPLAY_NAME_MAPPINGS,
++)
++
++WEB_DIRECTORY = "./web"
++
++__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
+diff --git a/custom_nodes/ohos_external_api/api_client.py b/custom_nodes/ohos_external_api/api_client.py
+new file mode 100644
+index 0000000..cf6eeff
+--- /dev/null
++++ b/custom_nodes/ohos_external_api/api_client.py
+@@ -0,0 +1,156 @@
++# OHOS_EXTERNAL_API v1 — 自研第三方 API 节点组的 HTTP 客户端
++# (设计: docs/external-api-node-design.md; 密钥方案见该文 §1.5)
++"""纯 requests 实现, 零新依赖(requests/PIL/numpy/torch 均在设备栈内)。
++
++分工: 本模块只管「发请求 / 解析响应 / 转张量」, 不含任何 ComfyUI 节点语义。
++密钥: 从 <comfyui根>/api_keys.json 读(与 server.py 的 /api/ohos/apikeys 端点同源);
++      节点参数只写服务商名 ⇒ 工作流 json 里不含秘密。
++"""
++import base64
++import io
++import json
++import os
++import re
++
++__all__ = [
++    "ApiError", "api_keys_path", "load_api_keys", "resolve_api_key",
++    "render_template", "template_placeholders", "extract_path",
++    "http_request", "base64_to_image_tensor",
++]
++
++
++class ApiError(Exception):
++    """节点级可读错误。nodes.py 捕获后直接冒泡(显示为节点错误, 不崩进程)。"""
++
++
++# ── 密钥 ────────────────────────────────────────────────────────────────────
++
++def comfy_root():
++    """comfyui 根目录。优先 folder_paths(对 zipimport 亦正确), 退化为本文件上溯三级。"""
++    try:
++        import folder_paths
++        return folder_paths.base_path
++    except Exception:
++        return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++
++def api_keys_path():
++    return os.path.join(comfy_root(), "api_keys.json")
++
++
++def load_api_keys():
++    """读密钥表; 文件缺失/损坏一律返回空表(节点据此报「未配置」, 不抛裸异常)。"""
++    try:
++        with open(api_keys_path(), encoding="utf-8") as f:
++            data = json.load(f)
++    except (OSError, ValueError):
++        return {}
++    return data if isinstance(data, dict) else {}
++
++
++def resolve_api_key(provider):
++    """未配置返回 None —— 调用方据此报可读错误, 而不是发出无鉴权的请求。"""
++    if not provider or provider == "(none)":
++        return None
++    return load_api_keys().get(provider) or None
++
++
++# ── 模板 ────────────────────────────────────────────────────────────────────
++
++_PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
++
++
++def template_placeholders(text):
++    return sorted({m.group(1) for m in _PLACEHOLDER.finditer(text or "")})
++
++
++def render_template(text, values):
++    """把 {{name}} 替换为 values[name] 的 JSON 字面量(字符串带引号, 数字/布尔原样)。
++
++    单层替换(不做二次展开): 替换结果里若含 {{...}} 不会被再次解释。
++    values 里没有的占位符原样保留 —— 由调用方比对 template_placeholders 报错,
++    避免静默发出缺字段的请求。
++    """
++    def repl(m):
++        key = m.group(1)
++        if key not in values:
++            return m.group(0)
++        return json.dumps(values[key], ensure_ascii=False)
++
++    return _PLACEHOLDER.sub(repl, text or "")
++
++
++# ── JSON 路径提取 ───────────────────────────────────────────────────────────
++
++_PATH_TOKEN = re.compile(r"([A-Za-z_][A-Za-z0-9_\-]*)|\[(\d+)\]")
++
++
++def extract_path(data, path):
++    """按 `a.b[0].c` 取值。path 为空 → 原样返回。取不到 → ApiError(指出断在哪一层)。"""
++    if not path:
++        return data
++    cur = data
++    for name, index in _PATH_TOKEN.findall(path):
++        where = f"[{index}]" if index != "" else name
++        try:
++            cur = cur[int(index)] if index != "" else cur[name]
++        except (KeyError, IndexError, TypeError):
++            raise ApiError(f"响应里找不到字段路径 '{path}'(在 {where} 处中断)")
++    return cur
++
++
++# ── HTTP ────────────────────────────────────────────────────────────────────
++
++DEFAULT_MAX_RESPONSE_BYTES = 20 * 1024 * 1024
++
++
++def http_request(method, url, headers=None, body=None, timeout=30,
++                 max_response_bytes=DEFAULT_MAX_RESPONSE_BYTES):
++    """发请求, 返回原始 bytes。失败抛 ApiError(含 HTTP 状态码 + body 前 200 字)。"""
++    import requests  # 延迟 import: 宿主纯逻辑单测无需此依赖
++
++    if not re.match(r"^https?://", url or "", re.I):
++        raise ApiError(f"URL 必须以 http/https 开头, 实际: {url!r}")
++    try:
++        resp = requests.request(method, url, headers=headers or {}, data=body,
++                                timeout=timeout, stream=True)
++    except requests.Timeout:
++        raise ApiError(f"请求超时({timeout}s): {url}")
++    except requests.RequestException as e:
++        raise ApiError(f"请求失败: {e}")
++
++    with resp:
++        raw = b""
++        for chunk in resp.iter_content(65536):
++            raw += chunk
++            if len(raw) > max_response_bytes:
++                raise ApiError(f"响应超过上限({max_response_bytes}B), 已中止: {url}")
++        if resp.status_code != 200:
++            snippet = raw[:200].decode("utf-8", "replace")
++            raise ApiError(f"HTTP {resp.status_code}: {snippet}")
++    return raw
++
++
++# ── base64 → IMAGE 张量 ─────────────────────────────────────────────────────
++
++def base64_to_image_tensor(text):
++    """base64 → torch 张量 (1,H,W,C) float32/255(与官方 bytesio_to_image_tensor 同构)。
++
++    延迟 import torch/PIL/numpy —— 宿主纯逻辑单测不装这些也能测本模块其余部分。
++    """
++    import numpy as np
++    import torch
++    from PIL import Image
++
++    if not text:
++        raise ApiError("响应里的图像字段为空")
++    try:
++        raw = base64.b64decode(text, validate=True)
++    except Exception as e:
++        raise ApiError(f"图像字段不是合法 base64: {e}")
++    try:
++        img = Image.open(io.BytesIO(raw)).convert("RGB")
++    except Exception as e:
++        raise ApiError(f"base64 内容不是可解码的图像: {e}")
++    arr = np.asarray(img).astype("float32") / 255.0
++    return torch.from_numpy(arr)[None, ...]
+diff --git a/custom_nodes/ohos_external_api/nodes.py b/custom_nodes/ohos_external_api/nodes.py
+new file mode 100644
+index 0000000..13ca8b0
+--- /dev/null
++++ b/custom_nodes/ohos_external_api/nodes.py
+@@ -0,0 +1,215 @@
++# OHOS_EXTERNAL_API v1 — 自研通用第三方 API 节点组(W4; 设计 docs/external-api-node-design.md)
++"""三个节点: OHOS_API_Text / OHOS_API_Image / OHOS_API_HTTP。纯 Python, 零新依赖。
++
++输出标准 ComfyUI 类型(TEXT=STRING / IMAGE=torch 张量), 可直接接 PreviewImage / SaveImage
++等原生下游。密钥: 节点只填服务商名(provider), 真实密钥存 <comfyui根>/api_keys.json
++(由前端设置页经 /api/ohos/apikeys 写入) ⇒ **工作流 json 里没有秘密**。
++
++模板: headers/body 里的 {{name}} 会被替换为 JSON 字面量(字符串带引号, 数字原样),
++      可用占位符见 _template_values(); {{api_key}} 由 provider 自动解析。
++"""
++import json
++
++from .api_client import (ApiError, base64_to_image_tensor, extract_path,
++                         http_request, render_template, resolve_api_key,
++                         template_placeholders)
++
++CATEGORY = "ohos/api"
++
++_PROVIDERS = ["(none)", "siliconflow", "dashscope", "custom"]
++
++# 鉴权头用 {{auth_header}}(整值占位符, 由 _template_values 组装 "Bearer <key>")。
++# ⚠ 不能写 "Bearer {{api_key}}": 占位符在引号内时, render_template 的 JSON 字面量替换会
++#   产出 `"Bearer "sk-xxx""`(双引号嵌套, 非法 JSON) —— 即"配了密钥反而必炸"。
++#   本项目铁律: **占位符只能作独立 JSON 值**(裸写), 嵌入字符串由 Python 侧拼好再传入。
++_HEADERS_DEFAULT = """{
++  "Content-Type": "application/json",
++  "Authorization": {{auth_header}}
++}"""
++
++# ⚠ 占位符作为**独立 JSON 值**时必须裸写(不带引号): render_template 会把它替换为 JSON
++#   字面量(字符串自带引号)。写成 "{{prompt}}" 会渲染出 ""..." "(双引号嵌套)非法 JSON ——
++#   2026-09-12 真机 mock 复现(content 变成 ""你好，云""), 打真实 API 必被 400。
++#   故默认模板用裸模板字符串, **不能**走 json.dumps(= 会给值加引号)。
++#   嵌入字符串内的占位符(如 "Bearer {{api_key}}"、"{{w}}x{{h}}")仍带引号, 见 _HEADERS_DEFAULT。
++_BODY_TEXT_DEFAULT = """{
++  "model": "Qwen/Qwen2.5-7B-Instruct",
++  "messages": [{"role": "user", "content": {{prompt}}}]
++}"""
++
++_BODY_IMAGE_DEFAULT = """{
++  "model": "Kwai-Kolors/Kolors",
++  "prompt": {{prompt}},
++  "image_size": "{{width}}x{{height}}"
++}"""
++
++
++def _template_values(provider, extra):
++    """组装占位符表。provider=(none) 时 api_key 置空串(允许无鉴权端点, 如本地模拟器);
++    配了 provider 却没密钥 → 报可读错误, 不让请求带着空鉴权发出去。"""
++    values = dict(extra)
++    if provider and provider != "(none)":
++        key = resolve_api_key(provider)
++        if not key:
++            raise ApiError(
++                f"服务商「{provider}」尚未配置密钥 —— 请在 设置 → 云 API 密钥 里填写")
++        values["api_key"] = key
++        values["auth_header"] = f"Bearer {key}"
++    else:
++        values["api_key"] = ""
++        values["auth_header"] = ""
++    return values
++
++
++def _render_checked(what, text, values):
++    """渲染模板并校验没有残留占位符(残留 = 用户拼错了名字, 应报错而非静默发请求)。"""
++    out = render_template(text, values)
++    left = template_placeholders(out)
++    if left:
++        raise ApiError(f"{what} 里有未填充的占位符: {', '.join(left)}")
++    return out
++
++
++def _loads(what, text, fallback=None):
++    try:
++        return json.loads(text) if text.strip() else (fallback if fallback is not None else {})
++    except ValueError as e:
++        raise ApiError(f"{what} 不是合法 JSON: {e}")
++
++
++class OHOS_API_Text:
++    """文本/LLM API(OpenAI 兼容 chat completions, 或任意返回 JSON 的文本端点)。"""
++
++    @classmethod
++    def INPUT_TYPES(cls):
++        return {
++            "required": {
++                "url": ("STRING", {"default": "https://api.siliconflow.cn/v1/chat/completions"}),
++                "provider": (_PROVIDERS,),
++                "headers": ("STRING", {"default": _HEADERS_DEFAULT, "multiline": True}),
++                "body": ("STRING", {"default": _BODY_TEXT_DEFAULT, "multiline": True}),
++                "path": ("STRING", {"default": "choices[0].message.content"}),
++                "timeout": ("INT", {"default": 60, "min": 1, "max": 600}),
++            },
++            "optional": {
++                "prompt": ("STRING", {"default": "", "multiline": True}),
++            },
++        }
++
++    RETURN_TYPES = ("STRING",)
++    RETURN_NAMES = ("TEXT",)
++    FUNCTION = "run"
++    CATEGORY = CATEGORY
++    # 无下游也可执行(空 TEXT 输出会被 validate_prompt 判为 prompt_no_outputs 拒收)
++    OUTPUT_NODE = True
++
++    def run(self, url, provider, headers, body, path, timeout, prompt=""):
++        values = _template_values(provider, {"prompt": prompt, "temperature": 0.7,
++                                             "seed": 0, "width": 1024, "height": 1024})
++        hdr = _loads("headers", _render_checked("headers", headers, values))
++        body_text = _render_checked("body", body, values)
++        raw = http_request("POST", url, headers=hdr, body=body_text.encode("utf-8"),
++                           timeout=timeout)
++        data = _loads("响应", raw.decode("utf-8", "replace"), fallback=None)
++        value = extract_path(data, path)
++        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
++        return (text,)
++
++
++class OHOS_API_Image:
++    """图像生成/编辑 API(OpenAI 兼容 images/generations, 或任意返回 base64 图片的端点)。
++
++    输出标准 IMAGE 张量, 可直接接 PreviewImage / SaveImage / 其他原生图像节点。
++    """
++
++    @classmethod
++    def INPUT_TYPES(cls):
++        return {
++            "required": {
++                "url": ("STRING", {"default": "https://api.siliconflow.cn/v1/images/generations"}),
++                "provider": (_PROVIDERS,),
++                "headers": ("STRING", {"default": _HEADERS_DEFAULT, "multiline": True}),
++                "body": ("STRING", {"default": _BODY_IMAGE_DEFAULT, "multiline": True}),
++                "field": ("STRING", {"default": "data[0].b64_json"}),
++                "timeout": ("INT", {"default": 120, "min": 1, "max": 600}),
++            },
++            "optional": {
++                "prompt": ("STRING", {"default": "", "multiline": True}),
++                "width": ("INT", {"default": 1024, "min": 64, "max": 4096}),
++                "height": ("INT", {"default": 1024, "min": 64, "max": 4096}),
++                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffff}),
++            },
++        }
++
++    RETURN_TYPES = ("IMAGE",)
++    RETURN_NAMES = ("IMAGE",)
++    FUNCTION = "run"
++    CATEGORY = CATEGORY
++    OUTPUT_NODE = True
++
++    def run(self, url, provider, headers, body, field, timeout,
++            prompt="", width=1024, height=1024, seed=0):
++        values = _template_values(provider, {"prompt": prompt, "width": width,
++                                             "height": height, "seed": seed,
++                                             "temperature": 0.7})
++        hdr = _loads("headers", _render_checked("headers", headers, values))
++        body_text = _render_checked("body", body, values)
++        raw = http_request("POST", url, headers=hdr, body=body_text.encode("utf-8"),
++                           timeout=timeout)
++        data = _loads("响应", raw.decode("utf-8", "replace"), fallback=None)
++        return (base64_to_image_tensor(extract_path(data, field)),)
++
++
++class OHOS_API_HTTP:
++    """通用 HTTP 请求(任意 JSON API: 第三方网关 / 自建 hub / 代理服务)。
++
++    双输出: TEXT(响应原文) + JSON(格式化后; 解析失败时与 TEXT 相同)。
++    """
++
++    @classmethod
++    def INPUT_TYPES(cls):
++        return {
++            "required": {
++                "method": (["GET", "POST", "PUT", "DELETE"],),
++                "url": ("STRING", {"default": "https://example.com/api"}),
++                "provider": (_PROVIDERS,),
++                "headers": ("STRING", {"default": _HEADERS_DEFAULT, "multiline": True}),
++                "body": ("STRING", {"default": "{}", "multiline": True}),
++                "timeout": ("INT", {"default": 30, "min": 1, "max": 600}),
++            },
++        }
++
++    RETURN_TYPES = ("STRING", "STRING")
++    RETURN_NAMES = ("TEXT", "JSON")
++    FUNCTION = "run"
++    CATEGORY = CATEGORY
++    OUTPUT_NODE = True
++
++    def run(self, method, url, provider, headers, body, timeout):
++        values = _template_values(provider, {"prompt": "", "seed": 0,
++                                             "width": 1024, "height": 1024,
++                                             "temperature": 0.7})
++        hdr = _loads("headers", _render_checked("headers", headers, values))
++        body_text = _render_checked("body", body, values) if method != "GET" else ""
++        raw = http_request(method, url, headers=hdr,
++                           body=body_text.encode("utf-8") if body_text else None,
++                           timeout=timeout)
++        text = raw.decode("utf-8", "replace")
++        try:
++            pretty = json.dumps(json.loads(text), ensure_ascii=False, indent=2)
++        except ValueError:
++            pretty = text
++        return (text, pretty)
++
++
++NODE_CLASS_MAPPINGS = {
++    "OHOS_API_Text": OHOS_API_Text,
++    "OHOS_API_Image": OHOS_API_Image,
++    "OHOS_API_HTTP": OHOS_API_HTTP,
++}
++
++NODE_DISPLAY_NAME_MAPPINGS = {
++    "OHOS_API_Text": "云 API 文本 (Text)",
++    "OHOS_API_Image": "云 API 生图 (Image)",
++    "OHOS_API_HTTP": "云 API 通用请求 (HTTP)",
++}
+diff --git a/custom_nodes/ohos_external_api/web/api_keys.js b/custom_nodes/ohos_external_api/web/api_keys.js
+new file mode 100644
+index 0000000..5138bd2
+--- /dev/null
++++ b/custom_nodes/ohos_external_api/web/api_keys.js
+@@ -0,0 +1,136 @@
++// OHOS_EXTERNAL_API v1 — 云 API 密钥设置项 + 本地/云双模路由提示
++// 设计: docs/external-api-node-design.md §1.5
++//
++// 密钥为什么用「自定义渲染器」而不是普通 text 设置项:
++//   普通设置项的值会落进 comfy.settings.json(明文); 自定义渲染器不调 setter,
++//   值只经 /api/ohos/apikeys 写进 <comfyui根>/api_keys.json(0600),
++//   且界面只回显掩码 —— 两处都不留明文。
++import { app } from "../../scripts/app.js";
++import { api } from "../../scripts/api.js";
++
++const API_PATH = "/ohos/apikeys"; // api.fetchApi 自动补 /api 前缀
++
++const PROVIDERS = {
++  siliconflow: { label: "硅基流动", url: "https://cloud.siliconflow.cn/account/ak" },
++  dashscope: { label: "阿里百炼", url: "https://bailian.console.aliyun.com/?apiKey=1" },
++};
++
++// 本机实测上限(status-and-next.md §2): 512 级在任何模型形态下都 SIG9
++const DEVICE_MAX_SIZE = 256;
++
++const INPUT_CSS =
++  "flex:1;min-width:0;padding:4px 8px;border:1px solid var(--border-color,#666);" +
++  "border-radius:4px;background:transparent;color:inherit";
++const BUTTON_CSS =
++  "padding:4px 12px;border:1px solid var(--border-color,#666);border-radius:4px;" +
++  "background:transparent;color:inherit;cursor:pointer;white-space:nowrap";
++
++function keyRenderer(provider) {
++  return (name, setter, value, attrs) => {
++    const row = document.createElement("div");
++    row.style.cssText = "display:flex;gap:8px;align-items:center;width:100%";
++
++    const input = document.createElement("input");
++    input.type = "password";
++    input.style.cssText = INPUT_CSS;
++
++    const save = document.createElement("button");
++    save.textContent = "保存";
++    save.style.cssText = BUTTON_CSS;
++
++    const status = document.createElement("span");
++    status.style.cssText = "font-size:12px;opacity:.8;white-space:nowrap";
++
++    const refresh = async () => {
++      try {
++        const r = await api.fetchApi(API_PATH);
++        const info = (await r.json())?.keys?.[provider];
++        input.placeholder = info?.configured ? info.masked : "未配置";
++      } catch {
++        input.placeholder = "未配置"; // 后端未就绪时静默
++      }
++    };
++
++    save.onclick = async () => {
++      const key = input.value.trim();
++      if (!key) {
++        status.textContent = "请先输入密钥";
++        return;
++      }
++      save.disabled = true;
++      status.textContent = "保存中…";
++      try {
++        const r = await api.fetchApi(API_PATH, {
++          method: "POST",
++          headers: { "Content-Type": "application/json" },
++          body: JSON.stringify({ provider, key }),
++        });
++        const d = await r.json().catch(() => ({}));
++        if (!r.ok) throw new Error(d?.error?.message || `HTTP ${r.status}`);
++        input.value = "";
++        input.placeholder = d.masked || "已配置";
++        status.textContent = "已保存";
++      } catch (e) {
++        status.textContent = `失败: ${e.message}`;
++      } finally {
++        save.disabled = false;
++      }
++    };
++
++    row.append(input, save, status);
++    refresh();
++    return row;
++  };
++}
++
++// ── 本地/云双模路由: 判定「本地跑不动」 ──────────────────────────────────────
++// 只做静态判定(读工作流结构), 不试跑 —— 依据两条, 都能从图里直接读出来。
++function localInfeasibility() {
++  const reasons = [];
++  for (const n of app.graph?._nodes || []) {
++    if (n.type === "EmptyLatentImage") {
++      const w = Number(n.widgets?.find((x) => x.name === "width")?.value || 0);
++      const h = Number(n.widgets?.find((x) => x.name === "height")?.value || 0);
++      if (w > DEVICE_MAX_SIZE || h > DEVICE_MAX_SIZE) {
++        reasons.push(`分辨率 ${w}×${h} 超过本机上限 ${DEVICE_MAX_SIZE}`);
++      }
++    }
++    const ckpt = n.widgets?.find((x) => x.name === "ckpt_name");
++    if (ckpt?.value) {
++      const options = n.constructor?.nodeData?.input?.required?.ckpt_name?.[0];
++      if (Array.isArray(options) && !options.includes(ckpt.value)) {
++        reasons.push(`模型 ${ckpt.value} 不在本机模型库`);
++      }
++    }
++  }
++  return [...new Set(reasons)];
++}
++
++function checkLocalFeasibility() {
++  const reasons = localInfeasibility();
++  if (!reasons.length) {
++    alert("本工作流在本机可以运行。");
++    return;
++  }
++  alert(
++    "本机跑不动这个工作流:\n\n" +
++      reasons.map((r) => `· ${r}`).join("\n") +
++      "\n\n可以用「云 API 生图」节点把这一步交给云端 API 执行。",
++  );
++}
++
++app.registerExtension({
++  name: "ohos.external_api",
++
++  settings: Object.entries(PROVIDERS).map(([id, meta]) => ({
++    id: `MagicFlow.ApiKey.${id}`,
++    name: `${meta.label} API 密钥`,
++    type: keyRenderer(id),
++    defaultValue: "",
++    tooltip: `密钥只存本机、不随工作流传出。获取地址: ${meta.url}`,
++  })),
++
++  getCanvasMenuOptions() {
++    return [{ content: "检查本机能否运行此工作流", callback: checkLocalFeasibility }];
++  },
++});
+diff --git a/server.py b/server.py
+index 4d522ff..52aac7d 100644
+--- a/server.py
++++ b/server.py
+@@ -641,6 +641,55 @@ class PromptServer():
+             files = folder_paths.get_filename_list(folder)
+             return web.json_response(files)
+ 
++        # —— OHOS 云 API 密钥端点(W4; 节点侧读同一文件, 见 custom_nodes/ohos_external_api) ——
++        # GET 只回掩码(绝不下发明文); 写盘 0600 + 原子替换。节点与存储同进程同侧 ⇒ 无跨层同步。
++        _ohos_keys_path = os.path.join(folder_paths.base_path, "api_keys.json")
++
++        def _ohos_keys_load():
++            try:
++                with open(_ohos_keys_path, encoding="utf-8") as f:
++                    data = json.load(f)
++            except (OSError, ValueError):
++                return {}
++            return data if isinstance(data, dict) else {}
++
++        def _ohos_keys_mask(value):
++            s = str(value or "")
++            return f"{s[:4]}***{s[-4:]}" if len(s) > 12 else ("***" if s else "")
++
++        @routes.get("/ohos/apikeys")
++        async def ohos_apikeys_get(request):
++            keys = _ohos_keys_load()
++            return web.json_response({"keys": {
++                p: {"configured": True, "masked": _ohos_keys_mask(v)}
++                for p, v in sorted(keys.items())}})
++
++        @routes.post("/ohos/apikeys")
++        async def ohos_apikeys_post(request):
++            try:
++                body = await request.json()
++            except Exception:
++                return web.json_response(
++                    {"error": {"code": "INVALID_BODY", "message": "json body required"}}, status=400)
++            provider = (body.get("provider") or "").strip()
++            key = body.get("key") or ""
++            if not provider or not key:
++                return web.json_response(
++                    {"error": {"code": "MISSING_FIELD",
++                               "message": "provider 与 key 均不能为空"}}, status=400)
++            keys = _ohos_keys_load()
++            keys[provider] = key
++            tmp = _ohos_keys_path + ".tmp"
++            try:
++                with open(tmp, "w", encoding="utf-8") as f:
++                    json.dump(keys, f, ensure_ascii=False, indent=2)
++                os.chmod(tmp, 0o600)
++                os.replace(tmp, _ohos_keys_path)
++            except OSError as e:
++                return web.json_response(
++                    {"error": {"code": "WRITE_FAILED", "message": str(e)}}, status=500)
++            return web.json_response({"ok": True, "masked": _ohos_keys_mask(key)})
++
+         # —— OHOS 模型下载端点(W3; 模块级驱动见 OHOSModelDownloader/_OHOS_DL_*) ——
+         # task_id 用 {[0-9a-f]{16}} 正则约束, 避免吞掉 /catalog 具名路由。
+         @routes.get("/models/download/catalog")
