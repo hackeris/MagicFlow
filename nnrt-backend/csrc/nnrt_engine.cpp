@@ -168,6 +168,10 @@ struct Graph {
     // 图签名(张量登记顺序 × dtype/rank/shape/类型) —— 用作编译缓存的子目录键。
     //   2026-09-12 定谳: 同一 cacheDir 下不同图会互相污染, 详见 Runner::run 里的 SetCache 注释。
     std::string sig;
+    // 构图期每个输入的**形状**(按 addInput 顺序) —— 用于把执行器暴露的输入与构图期输入对上号。
+    //   NNRt 会把部分输入折叠成常量: 实测 conv2d 构图 3 个输入(x/w/bias), 执行器只暴露 2 个。
+    //   数量不等时只能按形状匹配, 见 Runner::run 的 srcOf 逻辑。
+    std::vector<std::vector<int32_t>> inShapes;
 
     bool addDescTensor(const int32_t *shape, size_t rank, OH_NN_DataType dtype,
                        OH_NN_TensorType ttype, const void *data, size_t bytes)
@@ -205,7 +209,19 @@ struct Graph {
     // 动态输入(执行时喂数据): 构图阶段只登记, 数据在 exec() 里写入
     bool addInput(const int32_t *shape, size_t rank)
     {
-        return addDescTensor(shape, rank, OH_NN_FLOAT32, OH_NN_TENSOR, nullptr, 0);
+        if (!addDescTensor(shape, rank, OH_NN_FLOAT32, OH_NN_TENSOR, nullptr, 0)) { return false; }
+        inShapes.emplace_back(shape, shape + rank);
+        return true;
+    }
+
+    // 构图期就带数据的输入 —— 供**会被 NNRt 折叠为常量**的张量使用(conv2d 的 weight 实测如此:
+    //   执行器只为 3 个构图输入暴露 2 个)。这类张量若不在这里给数据, 编译器读到的是未初始化
+    //   内存。见 Engine::conv2d 的注释。
+    bool addInputWithData(const int32_t *shape, size_t rank, const float *data, size_t bytes)
+    {
+        if (!addDescTensor(shape, rank, OH_NN_FLOAT32, OH_NN_TENSOR, data, bytes)) { return false; }
+        inShapes.emplace_back(shape, shape + rank);
+        return true;
     }
 
     bool addParam(const ParamSpec &p)
@@ -223,13 +239,22 @@ struct Graph {
 class Runner {
 public:
     Runner(Engine &e, Graph &g) : eng_(e), g_(g) {}
-    ~Runner()
+    ~Runner() { releaseExecComp(); }
+
+    // 显式释放 exec/comp。**必须在销毁 model 之前调用** —— NNRt 里存在依赖倒置:
+    //   exec 依赖 comp、comp 依赖 model。2026-09-12 实测: conv2d 走 run 的失败路径时
+    //   (执行器输入数与构图期不符), 日志停在失败点前最后一条、无任何异常、comfy_child 直接从
+    //   进程表消失 —— 定位到"先 modelDel 再析构 Runner"这个顺序上。成功后正常执行的路径
+    //   (mm/softmax)未复现, 推测 execRun 成功已把内部状态绑定完整。稳妥起见统一成
+    //   run → releaseExecComp → modelDel。
+    //   ⚠ 仍然不碰 model_: 它归创建它的算子函数独占销毁(曾因二次销毁让 comfy_child 静默死亡,
+    //   并且中途改成"run 里 g_.model=nullptr 转移所有权"更糟 —— addDescTensor 内部正是用成员
+    //   model 调 AddTensor)。del 后指针置空, 故本方法可重复调用。
+    void releaseExecComp()
     {
         Fns &f = fns();
         if (exec_) f.execDel(&exec_);
         if (comp_) f.compDel(&comp_);
-        // ⚠ 不碰 model_: 它归创建它的算子函数销毁(见 run 里的所有权说明)。
-        //   曾经在这里 modelDel, 与算子函数的那次构成二次销毁 → comfy_child 静默死亡。
     }
 
     // 构图收口 + 编译 + 执行; outputs 按构图顺序接收数据。
@@ -282,16 +307,42 @@ public:
         //   cnt=12, 输出 2.0(= 1.0+1.0, 即 ADD 的结果)而非 4.0。POC 之所以"33 项零回归"仍成立,
         //   是因为它只断言 rcRun==SUCCESS、从不校验数值 —— **执行成功 ≠ 算得对**。
         //   故按图签名取子目录, 各图各缓存, 互不串味。
+        // ⚠ 2026-09-12 实验: CONV2D 的 compBuild 在"**空**子目录 + HIGH(3)"下崩溃 —— 日志停在
+        //   e3 之后毫无输出、comfy_child 从进程表消失(非挂起而是崩溃; 探针有 catch(...) 兜底却
+        //   没打出 EX 行 ⇒ 异常不在我们的 try 块内)。同等参数在 poc/npu(顶层有效缓存目录 +
+        //   EXTREME)下 3~4ms 编译成功。本实验让 CONV2D 改用**更接近 POC 的配置**:
+        //     ① 顶层 cacheDir —— 里面有 NNRt 自己写的 cache_info.nncache, 是"有效缓存目录";
+        //        我们的 <hash>_p3 子目录实测**全为空**(NNRt 从不往里写), 即"无效缓存目录"。
+        //     ② perfMode=4(EXTREME) —— 注意 setPerfMode 原先把上限定为 3, 故 EXTREME 从未被
+        //        真正测过(与 POC 的核心差异之一)。
+        //   其他算子保持原样 ⇒ 零回归。若通过, 再单变量二分(缓存目录 / perfMode)。
+        // ⚠⚠ 不要用顶层 cacheDir! 2026-09-12 踩过: conv2d 曾临时改用 eng_.cacheDir()(顶层),
+        //   理由是"POC 用有效缓存目录而我们用空子目录" —— 结果 e4 build-ok 如期出现, 但那是
+        //   **命中 09-11 遗留的旧缓存**的假象: 执行器报出的输入形状是 [1,2,2,3](ADD 图的),
+        //   与本图 1x3x8x8 毫无关系(e5e/e5f 两行日志一对照即现原形)。顶层目录里的
+        //   0.nncache/cache_info.nncache 是改造子目录机制之前留下的, **不可再被指向**。
+        // ⚠ 2026-09-12 实验收尾: 曾让 CONV2D 单走 EXTREME(4)+顶层 cacheDir(为了贴近 POC),
+        //   结论 = **两者都不是关键变量** —— 顶层目录那轮是命中遗留缓存的假象(见上), EXTREME
+        //   那轮 conv 仍 build-rc=1。故回退为**所有算子统一 perfMode**(单变量原则: 探针矩阵里
+        //   只留 rank/layout 一个变量)。conv 的真实差异已定位在 STRIDES/DILATION 的 rank 与
+        //   形状布局上, 见 csrc/backend.cpp 与 bootstrap.cpp 的 CvTry 注释。
+        const bool isConv = (op == OH_NN_OPS_CONV2D);   // 仅用于日志标记, 不再影响行为
+        const int pm = eng_.perfMode();
         char subDir[1024];
         snprintf(subDir, sizeof(subDir), "%s/%016zx_p%d", eng_.cacheDir(),
-                 (size_t)std::hash<std::string>{}(g_.sig), eng_.perfMode());
+                 (size_t)std::hash<std::string>{}(g_.sig), pm);
         mkdir(subDir, 0755);   // 已存在=正常
-        elog("NNRT-ENG e2b cache-dir %s (sigLen=%zu)", subDir, g_.sig.size());
+        elog("NNRT-ENG e2b cache-dir %s (sigLen=%zu perf=%d conv=%d)",
+             subDir, g_.sig.size(), pm, int(isConv));
         if (f.compSetCache(comp_, subDir, 1) != OH_NN_SUCCESS) { return fail("setCache"); }
         if (f.compSetDev(comp_, eng_.deviceId()) != OH_NN_SUCCESS) { return fail("setDevice"); }
-        f.compPerf(comp_, (OH_NN_PerformanceMode)eng_.perfMode());
+        f.compPerf(comp_, (OH_NN_PerformanceMode)pm);
         elog("NNRT-ENG e3 before-build dev=%zu", eng_.deviceId());
-        if (f.compBuild(comp_) != OH_NN_SUCCESS) { return fail("build"); }
+        const OH_NN_ReturnCode rcBuild = f.compBuild(comp_);
+        // ⚠ 必须打返回码: "compBuild 失败"与"compBuild 挂起/崩溃"是两种完全不同的故障,
+        //   而两者的日志表现(没有 e4)一模一样。2026-09-12 就因此绕了远路。
+        elog("NNRT-ENG e3b build-rc=%d", (int)rcBuild);
+        if (rcBuild != OH_NN_SUCCESS) { return fail("build"); }
         elog("NNRT-ENG e4 build-ok");
 
         exec_ = f.execNew(comp_);
@@ -300,17 +351,79 @@ public:
         size_t nIn = 0, nOut = 0;
         f.execInCount(exec_, &nIn);
         f.execOutCount(exec_, &nOut);
-        if (execInputs.size() != nIn || execOutputs.size() != nOut) {
-            return fail("exec-arity-mismatch");
-        }
+        // ⚠ 分段日志(e5a/b/c): conv2d 实测崩在 e5 与 e6 之间且**无 EX 行**(探针有 catch(...) 兜底
+        //   ⇒ 是信号崩溃而非 C++ 异常), 必须定位到具体是哪一个 NNRt 调用。另外 e5a 会打出执行器
+        //   侧的真实张量数 —— poc/npu 记载过"执行器输入数可能与构图期不同"(可能含激活标志)。
+        elog("NNRT-ENG e5a exec-counts in=%zu out=%zu want-in=%zu want-out=%zu",
+             nIn, nOut, execInputs.size(), execOutputs.size());
+        if (execOutputs.size() != nOut) { return fail("exec-out-arity"); }
         std::vector<void *> tIn(nIn, nullptr), tOut(nOut, nullptr);
         for (size_t i = 0; i < nIn; i++) {
             void *d = f.execInDesc(exec_, (uint32_t)i);
+            elog("NNRT-ENG e5b-%zu in-desc %s", i, d ? "ok" : "null");
             tIn[i] = d ? f.tensorNew(eng_.deviceId(), d) : nullptr;
+            elog("NNRT-ENG e5b-%zu in-tensor %s", i, tIn[i] ? "ok" : "null");
         }
         for (size_t i = 0; i < nOut; i++) {
             void *d = f.execOutDesc(exec_, (uint32_t)i);
             tOut[i] = d ? f.tensorNew(eng_.deviceId(), d) : nullptr;
+        }
+        elog("NNRT-ENG e5c exec-tensors-ok");
+        // ⚠ 执行器暴露的输入数可能**少于**构图期输入数 —— NNRt 会把部分输入折叠成常量
+        //   (实测 conv2d: 构图 3 个 x/w/bias, 执行器只暴露 2 个)。所以**不能**按下标直接对应,
+        //   数量不等时按**形状**匹配(取第一个形状相同且未占用的构图输入)。
+        const size_t NONE = (size_t)-1;
+        std::vector<size_t> srcOf(nIn, NONE);
+        if (execInputs.size() == nIn) {
+            for (size_t i = 0; i < nIn; i++) { srcOf[i] = i; }
+        } else if (g_.inShapes.size() == execInputs.size()) {
+            std::vector<bool> used(g_.inShapes.size(), false);
+            for (size_t i = 0; i < nIn; i++) {
+                if (!tIn[i]) { continue; }
+                int32_t *shp = nullptr;
+                size_t rl = 0;
+                f.descGetShape(f.tensorDesc(tIn[i]), &shp, &rl);
+                size_t m = NONE;
+                for (size_t j = 0; j < g_.inShapes.size(); j++) {
+                    if (used[j] || g_.inShapes[j].size() != rl) { continue; }
+                    bool same = true;
+                    for (size_t k = 0; k < rl; k++) {
+                        if (g_.inShapes[j][k] != (shp ? shp[k] : -1)) { same = false; break; }
+                    }
+                    if (same) { m = j; break; }
+                }
+                if (m == NONE) {
+                    // ⚠ 执行器可能多出**非数据输入**(poc/npu 记载过"执行器输入数可能是
+                    //   2 = 输入 + 激活标志", 与构图期定义的算子输入数不同)。这类输入的形状不在
+                    //   构图期输入里, **不喂数据**(保持 NNRt 默认), 仅留痕。
+                    //   风险: 若某个真数据输入也被判为"无匹配", 它就不会被喂 —— 这种情况由
+                    //   c28/c29 的数值对拍兜住(数值错会立刻暴露)。
+                    char ed[48] = "";
+                    for (size_t k = 0; k < rl && k < 4; k++) {
+                        snprintf(ed + strlen(ed), sizeof(ed) - strlen(ed), "%s%d",
+                                 k ? "," : "", shp ? shp[k] : -1);
+                    }
+                    elog("NNRT-ENG e5e exec-in%zu rank=%zu shape=[%s] 无匹配 -> 跳过", i, rl, ed);
+                    continue;
+                }
+                used[m] = true;
+                srcOf[i] = m;
+            }
+        } else {
+            return fail("exec-arity-mismatch");
+        }
+        elog("NNRT-ENG e5d input-map exec=%zu want=%zu", nIn, execInputs.size());
+        // 数量不等时把构图期输入形状也打出来 —— e5e(执行器侧) 与 e5f(构图期) 对照即可看出
+        //   究竟是哪一个输入被 NNRt 折叠成了常量。
+        if (execInputs.size() != nIn) {
+            for (size_t j = 0; j < g_.inShapes.size(); j++) {
+                char gd[48] = "";
+                for (size_t k = 0; k < g_.inShapes[j].size() && k < 4; k++) {
+                    snprintf(gd + strlen(gd), sizeof(gd) - strlen(gd), "%s%d",
+                             k ? "," : "", g_.inShapes[j][k]);
+                }
+                elog("NNRT-ENG e5f graph-in%zu shape=[%s]", j, gd);
+            }
         }
         bool allOk = true;
         for (size_t i = 0; i < nIn; i++) {
@@ -328,12 +441,18 @@ public:
                 snprintf(dims + strlen(dims), sizeof(dims) - strlen(dims), "%s%d",
                          k ? "," : "", shp ? shp[k] : -1);
             }
-            elog("NNRT-ENG e6-in%zu cnt=%zu rank=%zu shape=[%s] copyBytes=%zu",
-                 i, cnt, rl, dims, cnt * sizeof(float));
-            if (!buf || !execInputs[i]) { allOk = false; break; }
-            memcpy(buf, execInputs[i], cnt * sizeof(float));
+            elog("NNRT-ENG e6-in%zu cnt=%zu rank=%zu shape=[%s] src=%zu copyBytes=%zu",
+                 i, cnt, rl, dims, srcOf[i], cnt * sizeof(float));
+            if (srcOf[i] == NONE) { continue; }   // 非数据输入(如激活标志): 不喂数据
+            if (!buf || !execInputs[srcOf[i]]) { allOk = false; break; }
+            memcpy(buf, execInputs[srcOf[i]], cnt * sizeof(float));
         }
-        elog("NNRT-ENG e6 tensors-ready in=%zu out=%zu allOk=%d", nIn, nOut, int(allOk));
+        // 保险: 一个输入都没喂上 ⇒ 输出必然错, 直接失败(免得把错误数据当成结果用)。
+        size_t fed = 0;
+        for (size_t i = 0; i < nIn; i++) { if (srcOf[i] != NONE) { fed++; } }
+        elog("NNRT-ENG e6 tensors-ready in=%zu out=%zu allOk=%d fed=%zu",
+             nIn, nOut, int(allOk), fed);
+        if (allOk && fed == 0 && nIn > 0) { return fail("exec-no-input-fed"); }
         bool ran = false;
         if (allOk) {
             elog("NNRT-ENG e7 before-execRun");
@@ -483,7 +602,10 @@ bool Engine::matmul(const float *a, const float *b, float *y,
     std::vector<float *> out = {y};
     Runner r(*this, g);
     bool ok = r.run(OH_NN_OPS_MATMUL, params, ins, outs, in, out);
-    f.modelDel(&g.model);   // model 由本函数(创建者)独占销毁; ~Runner 不碰它(见其注释)
+    // ⚠ 顺序不可换: 先释放 exec/comp, 再销毁 model(依赖倒置, 见 releaseExecComp 注释)。
+    //   model 归本函数(创建者)独占销毁; ~Runner 不碰它。
+    r.releaseExecComp();
+    f.modelDel(&g.model);
     if (!ok) { setErr("matmul: %s", r.why()); }
     return ok;
 }
@@ -511,7 +633,9 @@ bool Engine::softmax(const float *x, float *y, int64_t rows, int64_t cols)
     std::vector<float *> out = {y};
     Runner r(*this, g);
     bool ok = r.run(OH_NN_OPS_SOFTMAX, params, ins, outs, in, out);
-    f.modelDel(&g.model);   // model 由本函数(创建者)独占销毁; ~Runner 不碰它(见其注释)
+    // ⚠ 顺序不可换: 先释放 exec/comp, 再销毁 model(依赖倒置, 见 releaseExecComp 注释)。
+    r.releaseExecComp();
+    f.modelDel(&g.model);
     if (!ok) { setErr("softmax: %s", r.why()); }
     return ok;
 }
@@ -523,33 +647,69 @@ bool Engine::conv2d(const float *x, const float *w, const float *bias, float *y,
 {
     if (!ready_) { return false; }
     Fns &f = fns();
-    int32_t sx[4] = {(int32_t)n, (int32_t)c, (int32_t)ih, (int32_t)iw};
-    int32_t sw[4] = {(int32_t)oc, (int32_t)c, (int32_t)kh, (int32_t)kw};
+    // ⚠⚠ 形状按 **NHWC** 声明: NNRt 走 MindIR Conv2DFusion(NHWC 语义), 传 NCHW 的 [1,C,H,W]
+    //   会被读成 N=1,H=C,W=H,C=W, 与权重反推的 inChannel=C 冲突 ⇒ compBuild rc=1。
+    //   依据: (1) POC 样本 [1,2,2,3] 在 NHWC 下 C=3 与权重 OHWI [*,*,*,3] 自洽;
+    //         (2) 2026-09-12 实测矩阵(s2/s4 × nchw/nhwc)见 bootstrap.cpp 的 CvTry 注释。
+    //   调用方(backend.cpp)已把数据重排成 NHWC。
+    int32_t sx[4] = {(int32_t)n, (int32_t)ih, (int32_t)iw, (int32_t)c};
+    // ⚠ 权重布局 = NNRt 约定的 **[outC, kH, kW, inC]**(OHWI), 不是 PyTorch 的 OIHW。
+    //   权威依据: build/nnrt-src/.../ops/conv2d_builder.cpp —— SetChannel 取
+    //   m_inChannel = weightShape[3]、m_outChannel = weightShape[0]; SetKernelSize 取
+    //   m_kernelSize = [weightShape[1], weightShape[2]]。传错布局(如直接给 OIHW)时
+    //   编译器会拿到 "kernel=[IC,KH] 且 inChannel=KW" 的自相矛盾图, 后果**不是报错而是
+    //   compBuild 挂起不返回** —— 2026-09-12 实测: N=1 C=2 H=W=6, OIHW [3,2,3,3] 直接传,
+    //   声明 inChannel(=KW=3) 与输入通道(=IC=2) 不符, e3 before-build 后 110s 无 e4。
+    //   (poc/npu 的 CONV2D 样本 kH=kW=inC=3 三数恰好相等, 无法区分布局, 所以从未暴露。)
+    int32_t sw[4] = {(int32_t)oc, (int32_t)kh, (int32_t)kw, (int32_t)c};
     int32_t sb[1] = {(int32_t)oc};
-    int32_t oh = (int32_t)((ih + 2 * pads[1] - kh) / strides[1] + 1);
-    int32_t ow = (int32_t)((iw + 2 * pads[3] - kw) / strides[3] + 1);
-    int32_t sy[4] = {(int32_t)n, (int32_t)oc, oh, ow};
+    // ⚠ strides 是 **rank=2** 的 [sH, sW](不是 4 元素) —— 见 backend.cpp 同名注释与
+    //   conv2d_builder.cpp 的 SetStrides(不校验 rank, 整段拷给 MindIR; 单测为 2 元素)。
+    //   pads 仍是 4 元素 [top,bottom,left,right](SetPad 按 elementCount==4 判定 padList)。
+    int32_t oh = (int32_t)((ih + pads[0] + pads[1] - kh) / strides[0] + 1);
+    int32_t ow = (int32_t)((iw + pads[2] + pads[3] - kw) / strides[1] + 1);
+    int32_t sy[4] = {(int32_t)n, oh, ow, (int32_t)oc};   // NHWC 输出
     Graph g;
     g.f = &f;
     g.model = f.modelNew();
     if (!g.model) { setErr("conv2d: modelNew"); return false; }
     // 顺序须与 execInDesc 的索引一致: 输入 x/w/bias, 输出 y
-    if (!g.addInput(sx, 4) || !g.addInput(sw, 4) || !g.addInput(sb, 1) ||
+    // ⚠⚠ weight 与 bias 用 **addInputWithData**(构图期即交付数据): NNRt 会把它们折叠成常量 ——
+    //   实测证据: 同一张图构图期 3 个输入, 执行器只暴露 **2** 个(e5a 日志), 即其中一个不是运行时
+    //   输入而是编译器常量。若像 x 那样只登记形状不给数据, 编译器读到的就是未初始化内存。
+    //   ⚠ poc/npu 从未暴露这一点: 它对**所有**执行器输入统一填 1.0, 从不需要知道谁对应谁。
+    //   数据量: weight = oc*kh*kw*c 个 float(OHWI 布局, 调用方已重排), bias = oc 个 float。
+    if (!g.addInput(sx, 4) ||
+        !g.addInputWithData(sw, 4, w, (size_t)oc * kh * kw * c * sizeof(float)) ||
+        !g.addInputWithData(sb, 1, bias, (size_t)oc * sizeof(float)) ||
         !g.addOutput(sy, 4)) {
         f.modelDel(&g.model);
         setErr("conv2d: %s", g.why);
         return false;
     }
+    // ⚠ dilation **必须显式给**: Conv2DBuilder 的 m_dilation 默认是**空 vector**, 而
+    //   GetPrimitive() 会把它交给 MindIR_Conv2DFusion_CreatePrimitive —— 空 dilation 很可能造出
+    //   非法算子, 表现为 compBuild 返回非 SUCCESS(不是崩溃; 两者日志都"没有 e4", 得靠 e3b 的
+    //   返回码区分)。POC 同样没传 dilation, 但它的"3~4ms 编译成功"极可能是**缓存命中**,
+    //   从未真正验证过 CONV2D 的首次编译 —— 别拿它当反证。
+    const int64_t dil[2] = {1, 1};   // rank=2, 同 strides
     std::vector<ParamSpec> params = {
-        {OH_NN_INT64, OH_NN_CONV2D_STRIDES, strides, sizeof(int64_t) * 4},
+        {OH_NN_INT64, OH_NN_CONV2D_STRIDES, strides, sizeof(int64_t) * 2},
         {OH_NN_INT64, OH_NN_CONV2D_PAD, pads, sizeof(int64_t) * 4},
+        {OH_NN_INT64, OH_NN_CONV2D_DILATION, dil, sizeof(dil)},
     };
     std::vector<uint32_t> ins = {0, 1, 2}, outs = {3};
     std::vector<const float *> in = {x, w, bias};
     std::vector<float *> out = {y};
     Runner r(*this, g);
     bool ok = r.run(OH_NN_OPS_CONV2D, params, ins, outs, in, out);
-    f.modelDel(&g.model);   // model 由本函数(创建者)独占销毁; ~Runner 不碰它(见其注释)
+    // 分段日志: conv2d 是**唯一走 run 失败路径**的算子(执行器输入数与构图期不符), 而失败路径
+    //   恰是崩溃发生处 —— 三段日志用来区分"run 返回" / "释放 exec/comp" / "销毁 model"。
+    elog("NNRT-ENG c2a conv-run-returned ok=%d", int(ok));
+    r.releaseExecComp();
+    elog("NNRT-ENG c2b conv-exec-comp-released");
+    f.modelDel(&g.model);
+    elog("NNRT-ENG c2c conv-model-released");
     if (!ok) { setErr("conv2d: %s", r.why()); }
     return ok;
 }

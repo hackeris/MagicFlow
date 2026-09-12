@@ -67,6 +67,8 @@ sleep 2
 BASE=$($HDC shell "wc -l < $P/nnrt-p0a.log" 2>/dev/null | tr -d ' \r' || echo 0)
 BASE=${BASE:-0}
 echo "  日志基线行数: $BASE"
+# 清 hilog 缓冲(见 [6/6] 的说明): 不清则 NNRt 的 LOGE 会被系统 PARAM 噪音挤出环形缓冲。
+$HDC shell "hilog -r" >/dev/null 2>&1 || echo "  (hilog -r 失败, 忽略)"
 $HDC shell "aa start -a EntryAbility -b app.fuqidian.magicflow" >/dev/null 2>&1 || true
 sleep 20
 
@@ -146,8 +148,27 @@ echo "--- P1D 探针(末 24 行) ---"
 grep NNRT-P1D "$NEW" | tail -24 || true
 echo "--- MM kernel(末 6 行) ---"
 grep NNRT-MM "$NEW" | tail -6 || true
-echo "--- ENG 引擎分段(末 12 行) ---"
-grep NNRT-ENG "$NEW" | tail -12 || true
+echo "--- CONV kernel(全部; 挂在哪一步一目了然) ---"
+grep NNRT-CONV "$NEW" || true
+echo "--- P1-g 手工复刻 poc/npu 构图(绕过 Engine) ---"
+grep NNRT-P1G "$NEW" || true
+echo "--- P1-h 设备支持性(GetAvailableOperations 直查, 不经 build) ---"
+grep NNRT-P1H "$NEW" || true
+# 设备侧的失败原因只在 NNRt 自己的 LOGE 里(经 hilog), 我们的日志看不到。
+#   NNRt 的日志宏固定 **LOG_TAG="NNRt" / LOG_DOMAIN=0xD002101**(见 build/nnrt-src/common/log.h),
+#   故**按 tag 精确抓**即可, 不需要 grep 全量。
+#   ⚠ 2026-09-12 教训: 前几轮用 `hilog -x | grep -i nnrt` 一直抓不到 —— 不是设备没打日志,
+#     而是 -x 导出全量后我们的行早被 PARAM 噪音挤出环形缓冲; 且 **-x 不能与 -T/-D 组合**
+#     ("Mutlti commands can't be used in combination")。正解 = [4/6] 里 `hilog -r` 先清缓冲,
+#     这里再按 tag 读尾部。宿主侧套 timeout, 防止误用阻塞模式把整轮验证挂死。
+echo "--- 设备侧 NNRt LOG(按 tag, 见 csrc/log.h) ---"
+timeout 15 $HDC shell "hilog -T NNRt -z 60" 2>/dev/null || true
+echo "--- 设备侧 ERROR 级(末 30 条, 兜底) ---"
+timeout 15 $HDC shell "hilog -L E -z 30" 2>/dev/null || true
+echo "--- conv2d 参数矩阵(A=poc复刻 B=inC2 C=stride1 D=原用例) ---"
+grep -E 'c2[789]\[' "$NEW" || true
+echo "--- ENG 引擎分段(末 26 行) ---"
+grep NNRT-ENG "$NEW" | tail -26 || true
 echo "--- 进程(不截断, 见头部坑 3) ---"
 $HDC shell "ps -ef 2>/dev/null | grep app.fuqidian | grep -v grep" || true
 echo "--- 子进程数(=1 只剩主进程 ⇒ comfy_child 已死) ---"
@@ -167,6 +188,15 @@ check "NNRt 执行成功(e8 ok=1)"          'NNRT-ENG e8 execRun ret=0 ok=1'
 check "mm 数值正确(val=4.0)"            'c16 mm-ok dim=2 val=4\.0000'
 check "matmul polyfill 正确(val=4.0)"   'c18 matmul-ok dim=2 val=4\.0000'
 check "fp16 精确输入零误差(归因)"        'c23 exact-inputs.*maxAbsErr=0\.000e\+00'
+check "softmax 下沉数值正确"             'c26 softmax PASS'
+# conv2d 判据 ≠ "下沉成功": 2026-09-12 已用 20+ 组单变量矩阵证明 **9030 设备侧的 NNRt 后端
+#   不支持 Conv2DFusion**(逐条排除 rank/layout/pad/规模/perf/缓存/fp16/数据供给; 失败点在
+#   NNCompiler::NormalBuild 的 IsSupportedModel(), 返回 OH_NN_FAILED=1)。故 conv 的**正确性
+#   判据是"PU1 张量上数值正确"** —— 走下沉或走 CPU 回落都必须对; 另有独立判据确认回落路径
+#   确实生效(而不是悄悄走了别的路)。设备侧若将来支持, 这两条仍成立。
+#   ⚠ c27-c29 用 at::conv2d 而非裸下沉接口, 正是为了覆盖"下沉/回落"两条路。
+check "conv2d 在 PU1 上数值正确(原用例)"   'c29\[D-original\] conv2d PASS'
+check "conv2d 不可下沉时走 CPU 回落"        'NNRT-CONV (not-sunk -> cpu redispatch|nnrt-failed -> cpu)'
 
 # mean 相对误差判据(需要解析浮点, 交给 python)
 if python3 - "$NEW" <<'PY'

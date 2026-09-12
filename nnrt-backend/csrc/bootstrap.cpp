@@ -117,6 +117,7 @@ struct Fns {
     OH_NN_ReturnCode (*compSetCache)(void *, const char *, uint32_t);
     OH_NN_ReturnCode (*compSetDev)(void *, size_t);
     OH_NN_ReturnCode (*compPerf)(void *, OH_NN_PerformanceMode);
+    OH_NN_ReturnCode (*compFp16)(void *, bool);
     OH_NN_ReturnCode (*compBuild)(void *);
     OH_NN_ReturnCode (*compDel)(void **);
     void *(*execNew)(void *);
@@ -152,6 +153,10 @@ bool collect(Fns &f)
     f.compSetCache = (decltype(f.compSetCache))need("OH_NNCompilation_SetCache");
     f.compSetDev = (decltype(f.compSetDev))need("OH_NNCompilation_SetDevice");
     f.compPerf = (decltype(f.compPerf))need("OH_NNCompilation_SetPerformanceMode");
+    // ⚠ 可选符号: 2026-09-12 实测 9030 的 libneural_network_runtime.so **没有**这个符号
+    //   (P1A s5c missing-symbols)。若按 need() 处理会拖垮整个 collect() → 所有探针 SKIP,
+    //   **一轮真机就这么白跑了**。诊断用/增强用接口一律走可选 dlsym, 调用点判空。
+    f.compFp16 = (decltype(f.compFp16))dlsym(g_rt, "OH_NNCompilation_SetEnableFp16");
     f.compBuild = (decltype(f.compBuild))need("OH_NNCompilation_Build");
     f.compDel = (decltype(f.compDel))need("OH_NNCompilation_Destroy");
     f.execNew = (decltype(f.execNew))need("OH_NNExecutor_Construct");
@@ -538,6 +543,323 @@ void probeDispatchTable()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// P1-g: 手工复刻 poc/npu 的 CONV2D 构图(**绕过 Engine**) —— 切分"我们的实现"与"设备侧"
+//   背景: Engine 编译 conv2d 稳定返回 OH_NN_FAILED(e3b build-rc=1), 而 poc/npu 的 CONV2D
+//   是 PASS 的。差异已收敛到实现细节, 只能逐项复刻来切分。
+//   本函数**严格照抄** poc/npu/entry/src/main/cpp/nnrt_probe.cpp 的 op_run:
+//     ① 张量登记顺序 ins → params → out;
+//     ② weight / bias **不给数据**(只 addTensor, 等价于 POC 的 T_F32 规格);
+//     ③ 参数只给 STRIDES + PAD(不传 dilation/group/activation);
+//     ④ 性能模式 EXTREME;  ⑤ 缓存目录独立(mkdir 后即用)。
+//   判读: 它成功 ⇒ 问题在我们的 Engine(逐项对比即可定位); 它也失败 ⇒ 设备/环境侧, 与实现无关。
+// ─────────────────────────────────────────────────────────────────────────────
+namespace {
+
+// 一次 CONV 类编译尝试的配置。tag 进日志；其余是图参数。
+//   ⚠ 2026-09-12 查源码(ops/conv2d_builder.cpp)纠正了两处**规格**错误, 均属"旧写法":
+//   (1) **STRIDES/DILATION 的 rank 必须是 2**, 不是 4 —— SetStrides/SetDilation **不校验 rank**,
+//       按 GetElementCount() 整段拷进 m_strides/m_dilation, 再由 MindIR_Conv2DFusion 吃下;
+//       而单测(m_stride_dim{2}/m_dilation_dim{2})与 GetPrimitive 断言({1,1})都是 **2 元素**。
+//       传 4 元素 ⇒ 设备侧拿到畸形 stride ⇒ compBuild 拒绝。**PAD 相反, padList 必须是 4 元素**。
+//   (2) **形状是 NHWC 语义** —— 走 MindIR Conv2DFusion, 同 POC 的 [1,2,2,3] 读法(C=3);
+//       传 NCHW 的 [1,3,8,8] 会被读成 N=1,H=3,W=8,C=8, 与权重反推的 inChannel=3 冲突。
+//   两者都保留开关做成矩阵, 免得又用"猜"代替"测"。
+struct CvTry {
+    const char *tag;
+    OH_NN_OperationType op;
+    int32_t c, h, w, oc, kh, kw;   // 逻辑尺寸(NCHW 语义); 权重恒 OHWI [oc,kh,kw,c]
+    int32_t stride;
+    int padKind;      // 0=不传 PAD, 1=padList(INT64×4), 2=padMode(INT8×1)
+    int nhwc;         // 形状声明为 NHWC [1,h,w,c]/[1,oh,ow,oc]?  (0=NCHW)
+    int strideRank;   // STRIDES/DILATION 的 rank: 2(单测规格) 或 4(旧写法)
+    int fp16;         // 调 OH_NNCompilation_SetEnableFp16(true)? (默认 false)
+    int noCache;      // 跳过 SetCache? (隔离"缓存机制本身"是否是失败源)
+};
+
+} // namespace
+
+// ── P1-h: 直接问设备"这张图的算子你支持吗" ──────────────────────────────────────
+// 权威依据: nncompiler.cpp:364 的 NormalBuild() —— 它在真正 PrepareModel **之前**先调
+//   IsSupportedModel() → device->GetSupportedOperation(→ HDI 服务); 只要有算子判 false 就
+//   返回 **OH_NN_FAILED(=1)**。这正是 conv2d 的 e3b build-rc=1 的来源。
+//   `OH_NNModel_GetAvailableOperations` 是同一判定的**公开入口**(neural_network_runtime.h
+//   since 9), 且**不需要 build** —— 用它能把"设备侧不支持"与"我们构图/参数有误"彻底分开:
+//   前者 → isSupported[k]=false, 后者 → 构图阶段(AddOperation/Finish)就非 0。
+//   ⚠ 该符号同样走**可选 dlsym**(设备可能裁剪; 2026-09-12 已证 9030 缺 SetEnableFp16)。
+static void probe_op_support()
+{
+    const char *home = getenv("PYTHONHOME");
+    if (!home || !*home) { logf("NNRT-P1H SKIP no-pythonhome"); return; }
+    if (!g_rt) { g_rt = dlopen("libneural_network_runtime.so", RTLD_NOW | RTLD_GLOBAL); }
+    if (!g_core) { g_core = dlopen("libneural_network_core.so", RTLD_NOW | RTLD_GLOBAL); }
+    if (!g_rt || !g_core) { logf("NNRT-P1H SKIP no-rt"); return; }
+    Fns f{};
+    if (!collect(f)) { logf("NNRT-P1H SKIP no-syms"); return; }
+    using FDev = OH_NN_ReturnCode (*)(const size_t **, uint32_t *);
+    using FName = OH_NN_ReturnCode (*)(size_t, const char **);
+    using FAvail = OH_NN_ReturnCode (*)(void *, size_t, const bool **, uint32_t *);
+    FDev fDev = (FDev)need("OH_NNDevice_GetAllDevicesID");
+    FName fName = (FName)need("OH_NNDevice_GetName");
+    FAvail fAvail = (FAvail)dlsym(g_rt, "OH_NNModel_GetAvailableOperations");
+    if (!fDev || !fName) { logf("NNRT-P1H SKIP no-dev-api"); return; }
+    if (!fAvail) { logf("NNRT-P1H SKIP no-GetAvailableOperations(符号缺失)"); return; }
+    const size_t *ids = nullptr;
+    uint32_t n = 0;
+    fDev(&ids, &n);
+    size_t target = 0;
+    bool found = false;
+    for (uint32_t i = 0; i < n && i < 4; i++) {
+        const char *nm = nullptr;
+        fName(ids[i], &nm);
+        if (nm && (strstr(nm, "NPU_") || strstr(nm, "Kirin"))) { target = ids[i]; found = true; }
+    }
+    if (!found) { logf("NNRT-P1H SKIP no-real-dev"); return; }
+
+    struct Spec {
+        OH_NN_DataType dt; OH_NN_TensorType tt; const int32_t *dims;
+        uint32_t rank; const void *data; size_t bytes;
+    };
+    // 逐张图问设备。返回码/支持位逐位打印 —— 这是"设备能力"的**直接证据**, 不再是推断。
+    auto query = [&](const char *tag, void *model) {
+        const bool *sup = nullptr;
+        uint32_t cnt = 0;
+        const int rc = (int)fAvail(model, target, &sup, &cnt);
+        // ⚠ 2026-09-12 实测 9030: ADD/CONV2D 两张图都返回 **rc=0 且 sup=空指针** ——
+        //   即该 API 在此设备上是**假成功**(裁剪版 NNRt, 同 SetEnableFp16 符号缺失)。
+        //   故这里把 sup/cnt 一并打出来, 免得又被 rc=0 误导成"设备支持"。
+        if (rc != 0 || !sup) {
+            logf("NNRT-P1H[%s] GetAvailableOperations rc=%d sup=%s opCount=%u (rc=0 且 sup 非空才算可用)",
+                 tag, rc, sup ? "非空" : "**空指针 → 该 API 在设备上未真正实现**", cnt);
+            return;
+        }
+        char buf[160] = "";
+        int nFalse = 0;
+        for (uint32_t i = 0; i < cnt && i < 8; i++) {
+            snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), "%s%d",
+                     i ? "," : "", sup[i] ? 1 : 0);
+            if (!sup[i]) { nFalse++; }
+        }
+        logf("NNRT-P1H[%s] rc=0 opCount=%u supported=[%s] -> %s",
+             tag, cnt, buf, nFalse ? "**设备不支持**" : "设备支持");
+    };
+    auto makeTensors = [&](void *model, const Spec *sp, int nsp) {
+        for (int i = 0; i < nsp; i++) {
+            void *td = f.descNew();
+            if (!td) { return false; }
+            const bool ok = f.descSetShape(td, sp[i].dims, sp[i].rank) == OH_NN_SUCCESS &&
+                            f.descSetDtype(td, sp[i].dt) == OH_NN_SUCCESS &&
+                            f.descSetFormat(td, OH_NN_FORMAT_NONE) == OH_NN_SUCCESS &&
+                            f.addTensor(model, td) == OH_NN_SUCCESS;
+            f.descDel(&td);
+            if (!ok) { return false; }
+            if (f.setTensorType(model, (uint32_t)i, sp[i].tt) != OH_NN_SUCCESS) { return false; }
+            if (sp[i].data && sp[i].bytes &&
+                f.setTensorData(model, (uint32_t)i, sp[i].data, sp[i].bytes) != OH_NN_SUCCESS) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    // 图 A: ADD(对照) —— 已知在 9030 上能真实编译(POC 唯一真实编译过的算子)。若它这里也报
+    //   不支持, 说明本探针本身有问题, 而不是设备的问题。
+    {
+        static const int32_t SA[4] = {1, 2, 2, 3};
+        const Spec sp[3] = {
+            {OH_NN_FLOAT32, OH_NN_TENSOR, SA, 4, nullptr, 0},
+            {OH_NN_FLOAT32, OH_NN_TENSOR, SA, 4, nullptr, 0},
+            {OH_NN_FLOAT32, OH_NN_TENSOR, SA, 4, nullptr, 0},
+        };
+        void *model = f.modelNew();
+        bool ok = model && makeTensors(model, sp, 3);
+        uint32_t ins[2] = {0, 1}, outs[1] = {2};
+        OH_NN_UInt32Array aP = {nullptr, 0}, aI = {ins, 2}, aO = {outs, 1};
+        if (ok) { ok = f.addOp(model, OH_NN_OPS_ADD, &aP, &aI, &aO) == OH_NN_SUCCESS; }
+        if (ok) { ok = f.specify(model, &aI, &aO) == OH_NN_SUCCESS; }
+        ok = ok && f.finish(model) == OH_NN_SUCCESS;
+        if (ok) { query("ADD", model); } else { logf("NNRT-P1H[ADD] 构图未过"); }
+        if (model) { f.modelDel(&model); }
+    }
+    // 图 B: CONV2D —— 用与前几轮扫描完全相同的规格(NHWC + rank2 + padList), 只把"编译"
+    //   换成"问支持性", 这样两边的结论可直接对照。
+    {
+        static const int32_t SX[4] = {1, 8, 8, 3};
+        static const int32_t SW[4] = {4, 3, 3, 3};   // OHWI
+        static const int32_t SB[1] = {4};
+        static const int32_t SO[4] = {1, 4, 4, 4};   // (8+1+1-3)/2+1 = 4
+        static const int32_t SD2[1] = {2};
+        static const int32_t SD4[1] = {4};
+        static const int64_t STR[2] = {2, 2};
+        static const int64_t PADL[4] = {1, 1, 1, 1};
+        static const int64_t DIL[2] = {1, 1};
+        const Spec sp[7] = {
+            {OH_NN_FLOAT32, OH_NN_TENSOR, SX, 4, nullptr, 0},
+            {OH_NN_FLOAT32, OH_NN_TENSOR, SW, 4, nullptr, 0},
+            {OH_NN_FLOAT32, OH_NN_TENSOR, SB, 1, nullptr, 0},
+            {OH_NN_INT64, OH_NN_CONV2D_STRIDES, SD2, 1, STR, sizeof(STR)},
+            {OH_NN_INT64, OH_NN_CONV2D_PAD, SD4, 1, PADL, sizeof(PADL)},
+            {OH_NN_INT64, OH_NN_CONV2D_DILATION, SD2, 1, DIL, sizeof(DIL)},
+            {OH_NN_FLOAT32, OH_NN_TENSOR, SO, 4, nullptr, 0},
+        };
+        void *model = f.modelNew();
+        bool ok = model && makeTensors(model, sp, 7);
+        uint32_t params[3] = {3, 4, 5}, ins[3] = {0, 1, 2}, outs[1] = {6};
+        OH_NN_UInt32Array aP = {params, 3}, aI = {ins, 3}, aO = {outs, 1};
+        if (ok) { ok = f.addOp(model, OH_NN_OPS_CONV2D, &aP, &aI, &aO) == OH_NN_SUCCESS; }
+        if (ok) { ok = f.specify(model, &aI, &aO) == OH_NN_SUCCESS; }
+        ok = ok && f.finish(model) == OH_NN_SUCCESS;
+        if (ok) { query("CONV2D", model); } else { logf("NNRT-P1H[CONV2D] 构图未过"); }
+        if (model) { f.modelDel(&model); }
+    }
+}
+
+static void probe_conv_scan()
+{
+    const char *home = getenv("PYTHONHOME");
+    if (!home || !*home) { logf("NNRT-P1G SKIP no-pythonhome"); return; }
+    if (!g_rt) { g_rt = dlopen("libneural_network_runtime.so", RTLD_NOW | RTLD_GLOBAL); }
+    if (!g_core) { g_core = dlopen("libneural_network_core.so", RTLD_NOW | RTLD_GLOBAL); }
+    if (!g_rt || !g_core) { logf("NNRT-P1G SKIP no-rt"); return; }
+    Fns f{};
+    if (!collect(f)) { logf("NNRT-P1G SKIP no-syms"); return; }
+    using FDev = OH_NN_ReturnCode (*)(const size_t **, uint32_t *);
+    using FName = OH_NN_ReturnCode (*)(size_t, const char **);
+    FDev fDev = (FDev)need("OH_NNDevice_GetAllDevicesID");
+    FName fName = (FName)need("OH_NNDevice_GetName");
+    if (!fDev || !fName) { logf("NNRT-P1G SKIP no-dev-api"); return; }
+    const size_t *ids = nullptr;
+    uint32_t n = 0;
+    fDev(&ids, &n);
+    size_t target = 0;
+    bool found = false;
+    for (uint32_t i = 0; i < n && i < 4; i++) {
+        const char *nm = nullptr;
+        fName(ids[i], &nm);
+        if (nm && (strstr(nm, "NPU_") || strstr(nm, "Kirin"))) { target = ids[i]; found = true; }
+    }
+    if (!found) { logf("NNRT-P1G SKIP no-real-dev"); return; }
+
+    // ⚠ 背景: 同一张 CONV2D 图, Engine 与"照抄 poc/npu 的手工构图"**都**得到 build=1;
+    //   而 ADD/mm/softmax 都能真实编译成功。故做一轮参数扫描, 判定究竟是**设备侧不支持**
+    //   还是**某种参数表达**的问题。每组: 独立 model + **独立缓存目录**(避免串图),
+    //   只记录 build 返回码(0=成功)。
+    // ⚠ 不收 CONV2D_TRANSPOSE: 其输出形状公式与普通卷积不同((H-1)*s-2p+KH), 用同一套
+    //   so_h/so_w 算会给出错误形状, 失败时无法区分"算子不支持"与"形状给错" —— 污染结论。
+    // 矩阵: 前两轮已把 **rank / layout / pad 形式 / 规模** 逐一证伪(全部 build=1, 见 commit
+    //   历史与 memory)。本轮的 4 组针对**编译配置**三个尚未单独动过的开关。
+    static const CvTry tries[] = {
+        {"s2-nhwc",         OH_NN_OPS_CONV2D, 3, 8, 8, 4, 3, 3, 2, 1, 1, 2, 0, 0},  // 基线(复跑)
+        {"s2-nhwc-fp16",    OH_NN_OPS_CONV2D, 3, 8, 8, 4, 3, 3, 2, 1, 1, 2, 1, 0},  // 开 fp16
+        {"s2-nhwc-nocache", OH_NN_OPS_CONV2D, 3, 8, 8, 4, 3, 3, 2, 1, 1, 2, 0, 1},  // 不设缓存
+        {"s2-nhwc-fp16-nc", OH_NN_OPS_CONV2D, 3, 8, 8, 4, 3, 3, 2, 1, 1, 2, 1, 1},  // 两者都
+    };
+    for (size_t t = 0; t < sizeof(tries) / sizeof(tries[0]); t++) {
+        const CvTry &k = tries[t];
+        const int padKind = k.padKind;
+        const int pH = (padKind == 1) ? 1 : 0;   // padList 给 1; padMode 的 padding 由设备按 SAME 自算
+        int32_t so_h = (k.h + 2 * pH - k.kh) / k.stride + 1;
+        int32_t so_w = (k.w + 2 * pH - k.kw) / k.stride + 1;
+        if (so_h <= 0 || so_w <= 0) { so_h = so_w = 1; }
+        // 形状按声明布局排列(NCHW=[1,c,h,w] / NHWC=[1,h,w,c]); 权重恒 OHWI(与布局无关)
+        const int32_t SX[4] = {1, k.nhwc ? k.h : k.c, k.nhwc ? k.w : k.h, k.nhwc ? k.c : k.w};
+        const int32_t SW[4] = {k.oc, k.kh, k.kw, k.c};   // OHWI(见 conv2d_builder 的 SetChannel)
+        const int32_t SB[1] = {k.oc};
+        const int32_t SD1[1] = {1};   // 标量/单元素
+        const int32_t SD2[1] = {2};   // rank=2 数组(单测规格)
+        const int32_t SD4[1] = {4};   // rank=4(padList)
+        int32_t SO[4] = {1, k.nhwc ? so_h : k.oc, k.nhwc ? so_w : so_h, k.nhwc ? k.oc : so_w};
+        const int64_t STR2[2] = {k.stride, k.stride};
+        const int64_t STR4[4] = {1, 1, k.stride, k.stride};
+        const int64_t DIL2[2] = {1, 1};
+        const int64_t DIL4[4] = {1, 1, 1, 1};
+        const int64_t PADL[4] = {1, 1, 1, 1};
+        const int8_t PADM[1] = {1};   // 1 = PAD_MODE_SAME(值域见 Validation::ValidatePadMode)
+        const void *pStr = (k.strideRank == 2) ? (const void *)STR2 : (const void *)STR4;
+        const size_t nStr = (k.strideRank == 2) ? sizeof(STR2) : sizeof(STR4);
+        const void *pDil = (k.strideRank == 2) ? (const void *)DIL2 : (const void *)DIL4;
+        const size_t nDil = (k.strideRank == 2) ? sizeof(DIL2) : sizeof(DIL4);
+        const int32_t *pRd = (k.strideRank == 2) ? SD2 : SD4;
+        void *model = f.modelNew();
+        if (!model) { logf("NNRT-P1G[%s] model-null", k.tag); continue; }
+        struct Spec {
+            OH_NN_DataType dt; OH_NN_TensorType tt; const int32_t *dims;
+            uint32_t rank; const void *data; size_t bytes;
+        };
+        Spec sp[8];
+        int nsp = 0;
+        sp[nsp++] = {OH_NN_FLOAT32, OH_NN_TENSOR, SX, 4, nullptr, 0};
+        sp[nsp++] = {OH_NN_FLOAT32, OH_NN_TENSOR, SW, 4, nullptr, 0};
+        sp[nsp++] = {OH_NN_FLOAT32, OH_NN_TENSOR, SB, 1, nullptr, 0};
+        sp[nsp++] = {OH_NN_INT64, OH_NN_CONV2D_STRIDES, pRd, 1, pStr, nStr};
+        if (padKind == 1) {
+            sp[nsp++] = {OH_NN_INT64, OH_NN_CONV2D_PAD, SD4, 1, PADL, sizeof(PADL)};
+        } else if (padKind == 2) {
+            sp[nsp++] = {OH_NN_INT8, OH_NN_CONV2D_PAD, SD1, 1, PADM, sizeof(PADM)};
+        }
+        sp[nsp++] = {OH_NN_INT64, OH_NN_CONV2D_DILATION, pRd, 1, pDil, nDil};
+        const int outIdx = nsp;
+        sp[nsp++] = {OH_NN_FLOAT32, OH_NN_TENSOR, SO, 4, nullptr, 0};
+        bool ok = true;
+        for (int i = 0; i < nsp && ok; i++) {
+            void *td = f.descNew();
+            if (!td) { ok = false; break; }
+            ok = f.descSetShape(td, sp[i].dims, sp[i].rank) == OH_NN_SUCCESS &&
+                 f.descSetDtype(td, sp[i].dt) == OH_NN_SUCCESS &&
+                 f.descSetFormat(td, OH_NN_FORMAT_NONE) == OH_NN_SUCCESS &&
+                 f.addTensor(model, td) == OH_NN_SUCCESS;
+            f.descDel(&td);
+            if (ok && f.setTensorType(model, (uint32_t)i, sp[i].tt) != OH_NN_SUCCESS) { ok = false; }
+            if (ok && sp[i].data && sp[i].bytes &&
+                f.setTensorData(model, (uint32_t)i, sp[i].data, sp[i].bytes) != OH_NN_SUCCESS) {
+                ok = false;
+            }
+        }
+        if (!ok) { f.modelDel(&model); logf("NNRT-P1G[%s] graph-fail", k.tag); continue; }
+        uint32_t params[4];
+        int np = 0;
+        params[np++] = 3;                                            // STRIDES
+        if (padKind != 0) { params[np++] = 4; }
+        params[np++] = (uint32_t)(4 + (padKind != 0 ? 1 : 0));       // DILATION(始终附带)
+        uint32_t ins[3] = {0, 1, 2};
+        uint32_t outs[1] = {(uint32_t)outIdx};
+        OH_NN_UInt32Array aP = {params, (uint32_t)np};
+        OH_NN_UInt32Array aI = {ins, 3};
+        OH_NN_UInt32Array aO = {outs, 1};
+        const int rcAdd = (int)f.addOp(model, k.op, &aP, &aI, &aO);
+        const int rcSpec = (int)f.specify(model, &aI, &aO);
+        const int rcFin = (rcAdd == 0) ? (int)f.finish(model) : -1;
+        int rcB = -1, rcFp = -2, rcC = -2, rcD = -2, rcP = -2;
+        if (rcAdd == 0 && rcSpec == 0 && rcFin == 0) {
+            void *comp = f.compNew(model);
+            if (comp) {
+                // noCache 组跳过 SetCache: 隔离"缓存机制本身是否是失败源"
+                if (!k.noCache) {
+                    char dir[512];
+                    snprintf(dir, sizeof(dir), "%s/nncache_scan", home);
+                    mkdir(dir, 0755);   // 父目录必须先建: 目标是二级路径
+                    snprintf(dir, sizeof(dir), "%s/nncache_scan/%s", home, k.tag);
+                    mkdir(dir, 0755);
+                    rcC = (int)f.compSetCache(comp, dir, 1);
+                }
+                rcD = (int)f.compSetDev(comp, target);
+                rcP = (int)f.compPerf(comp, OH_NN_PERFORMANCE_EXTREME);
+                // ⚠ SetEnableFp16 的返回码**本身就是诊断**: 它内部先问设备
+                //   IsFloat16PrecisionSupported(), 设备不支持时直接返回非 0 —— 无需看图。
+                //   rcFp = -3 表示符号在设备上不存在(9030 实测如此, 见 collect 内注释)。
+                if (k.fp16) { rcFp = f.compFp16 ? (int)f.compFp16(comp, true) : -3; }
+                rcB = (int)f.compBuild(comp);
+                f.compDel(&comp);
+            }
+        }
+        logf("NNRT-P1G[%s] op=%d nhwc=%d srank=%d pad=%d nparam=%d "
+             "set={c:%d d:%d p:%d fp16:%d} graph=%d/%d/%d build=%d (0=成功)",
+             k.tag, (int)k.op, k.nhwc, k.strideRank, padKind, np,
+             rcC, rcD, rcP, rcFp, rcAdd, rcSpec, rcFin, rcB);
+        f.modelDel(&model);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // P1-d: C++ 侧最底层探针(绕开 Python 层)
 //   背景(2026-09-12 实判): selftest 里 `torch.empty(device="nnrt")` 必崩, 且 fallback
 //   日志(NNRT-FB)一行都没有 —— 即崩点在**抵达 backend kernel 之前**。
@@ -689,6 +1011,89 @@ void probe_cpp_basic()
                      maxAbs);
             }
             logf("NNRT-P1D c22 P1-3 判据 maxRel<1e-3(SD 级出图可放到 1e-2, 见结论行)");
+
+            // ── P1-4: SOFTMAX 下沉 NNRt(对照 fp64 参考) ──────────────────────
+            //   与 mm 同理: 下沉的是 backend 算子 `aten::_softmax`, composite 的 `aten::softmax`
+            //   会 polyfill 到它 —— 所以这里调 at::softmax 即可覆盖两条路径。
+            {
+                auto xC = at::randn({4, 8}, at::TensorOptions().dtype(at::kFloat));
+                auto refS = at::softmax(xC.to(at::kDouble), 1);
+                auto xD = mkDev2(xC);
+                logf("NNRT-P1D c24 before softmax(PU1,4x8)");
+                auto yD = at::softmax(xD, 1);
+                const float *py = yD.data_ptr<float>();
+                const double *pr = refS.data_ptr<double>();
+                double maxAbs = 0.0, sumAbs = 0.0;
+                const int64_t n = yD.numel();
+                for (int64_t i = 0; i < n; i++) {
+                    const double d = std::fabs((double)py[i] - pr[i]);
+                    if (d > maxAbs) { maxAbs = d; }
+                    sumAbs += d;
+                }
+                // softmax 输出恒在 [0,1] 且每行和为 1, 故用绝对误差判定更直观。
+                //   fp16 精度下 exp 的舍入比矩阵乘更明显, 阈值取 5e-3(与 mean 判据同量级)。
+                logf("NNRT-P1D c25 softmax maxAbs=%.3e meanAbs=%.3e", maxAbs, sumAbs / (double)n);
+                logf("NNRT-P1D c26 softmax %s (判据 maxAbs<5e-3)", maxAbs < 5e-3 ? "PASS" : "FAIL");
+            }
+
+            // ── P1-4: CONV2D 下沉 NNRt(对照 fp64 参考) ───────────────────────
+            //   走 at::conv2d → composite → polyfill 到 aten::convolution(我们下沉的那个)。
+            //   非转置 / groups=1 / dilation=1 / 带 bias, 小尺寸(1,2,6,6)@(3,2,3,3) 便于人工核对。
+            //   ⚠ 2026-09-12 澄清: 之前把它读成"compBuild **挂起**", 实为 **compBuild 返回
+            //     OH_NN_FAILED**(e3b build-rc=1), 随后在清理阶段因销毁顺序错误而崩溃(已修);
+            //     两者日志都是"没有 e4", 极易混淆 —— 故 e3b 的返回码日志是必需的。
+            //   补传 dilation 无效(仍 rc=1), 说明不是"参数漏传"。故增设 P1-g 对照(绕过 Engine
+            //   手工复刻 POC 构图, 见上) + 下表逐组测试。
+            //   ⚠ **每组独立 try/catch**: 某组的 kernel TORCH_CHECK 抛异常不再吃掉后面的组。
+            //   2026-09-12 升级为**参数扫描**(6 组: 基线/无pad/padMode/极小图/深度卷积/转置卷积),
+            //   目的是判定"设备侧不支持 conv"还是"某种参数表达"的问题 —— 单一基线已证伪不了。
+            probe_conv_scan();    // P1-g: 结果见 NNRT-P1G[...] 行
+            probe_op_support();   // P1-h: 结果见 NNRT-P1H[...] 行(设备支持性的直接证据)
+            {
+                struct CvCase { const char *tag; int64_t c, h, w, oc, kh, kw, stride; };
+                const CvCase cs[] = {
+                    {"A-poc-repl", 3, 8, 8, 4, 3, 3, 2},
+                    {"B-inC2-s2",  2, 6, 6, 3, 3, 3, 2},
+                    {"C-inC3-s1",  3, 6, 6, 3, 3, 3, 1},
+                    {"D-original", 2, 6, 6, 3, 3, 3, 1},
+                };
+                for (const CvCase &k : cs) {
+                    try {
+                        auto xC = at::randn({1, k.c, k.h, k.w}, at::TensorOptions().dtype(at::kFloat));
+                        auto wC = at::randn({k.oc, k.c, k.kh, k.kw}, at::TensorOptions().dtype(at::kFloat));
+                        auto bC = at::randn({k.oc}, at::TensorOptions().dtype(at::kFloat));
+                        auto refV = at::conv2d(xC.to(at::kDouble), wC.to(at::kDouble), bC.to(at::kDouble),
+                                               {k.stride, k.stride});
+                        auto xD = mkDev2(xC), wD = mkDev2(wC), bD = mkDev2(bC);
+                        logf("NNRT-P1D c27[%s] before conv2d(PU1, 1x%lldx%lldx%lld * %lldx%lldx%lldx%lld s=%lld)",
+                             k.tag, (long long)k.c, (long long)k.h, (long long)k.w,
+                             (long long)k.oc, (long long)k.c, (long long)k.kh, (long long)k.kw,
+                             (long long)k.stride);
+                        auto yV = at::conv2d(xD, wD, bD, {k.stride, k.stride});
+                        // 分段: 2026-09-12 曾在上一行**无异常、无日志**地让 comfy_child 消失
+                        //   (信号级崩溃)。这行用来区分"崩在 conv2d 内"与"崩在之后的对拍"。
+                        logf("NNRT-P1D c27b[%s] conv2d-returned numel=%lld",
+                             k.tag, (long long)yV.numel());
+                        const float *pv = yV.data_ptr<float>();
+                        const double *pr = refV.data_ptr<double>();
+                        double maxAbs = 0.0, sumAbs = 0.0;
+                        const int64_t n = yV.numel();
+                        for (int64_t i = 0; i < n; i++) {
+                            const double d = std::fabs((double)pv[i] - pr[i]);
+                            if (d > maxAbs) { maxAbs = d; }
+                            sumAbs += d;
+                        }
+                        logf("NNRT-P1D c28[%s] conv2d outNumel=%lld (期望 %lld) maxAbs=%.3e meanAbs=%.3e",
+                             k.tag, (long long)n, (long long)refV.numel(), maxAbs, sumAbs / (double)n);
+                        logf("NNRT-P1D c29[%s] conv2d %s (判据 maxAbs<5e-3)",
+                             k.tag, maxAbs < 5e-3 ? "PASS" : "FAIL");
+                    } catch (const std::exception &e) {
+                        logf("NNRT-P1D c29[%s] EX %s", k.tag, e.what());
+                    } catch (...) {
+                        logf("NNRT-P1D c29[%s] EX unknown", k.tag);
+                    }
+                }
+            }
             (void)eng;
         }
     } catch (const std::exception &e) {

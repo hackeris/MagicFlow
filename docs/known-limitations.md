@@ -10,9 +10,14 @@
   原因分析与实测数据见 `local-inference-torch-parallel.md`。
 - **启动需要 1~2 分钟**。首次启动要解压三万余个运行时文件并载入完整 PyTorch,
   之后启动会快一些,但仍属固定成本。
-- **纯 CPU 推理**。矩阵运算走 OpenBLAS(12 线程);NPU 加速的可行性已在
-  9030(KirinXE90)机型上验证通过(33/34 算子),但尚未实现,当前全部推理
-  仍走 CPU(见 `../poc/npu/README.md`)。
+- **纯 CPU 推理**。矩阵运算走 OpenBLAS(12 线程)。NPU 加速已完成可行性验证与最小闭环
+  (PrivateUse1 后端: matmul / softmax 可下沉 NNRt,真机数值对拍通过),但**实测 9030
+  (KirinXE90)设备侧的 NNRt 运行时不支持卷积算子** —— 自建 20+ 组单变量实验已逐一排除
+  参数、权重布局、张量布局、规模、性能模式、缓存等全部可疑项,失败点在设备侧
+  `IsSupportedModel`(返回 `OH_NN_FAILED`)。卷积只能回落 CPU,而 SD 出图以卷积为主,
+  故当前推理仍全部走 CPU。详见 `../nnrt-backend/` 与 `npu-backend-roadmap.md`。
+  (注: 早期 `poc/npu` 报告的"33/34 算子通过"已被复核证伪 —— 实测是编译缓存串图导致的
+  假通过,详见 `npu-backend-roadmap.md` §3。)
 
 ## 模型
 

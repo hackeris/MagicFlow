@@ -59,7 +59,9 @@ public:
     //   2026-09-12 实测: EXTREME 下 MATMUL 的相对误差 ~4.2e-3(疑似内部降精度换性能),
     //   远超 fp32 累加应有的 ~1e-6 —— 故做成可切换, 便于按需在"精度/速度"间取值。
     //   ⚠ 模式参与缓存子目录名: 不同模式的编译结果不可复用(否则又是"串图"那类 bug 的翻版)。
-    void setPerfMode(int m) { perfMode_ = (m < 0 || m > 3) ? 3 : m; }
+    // ⚠ 上界原为 3 —— 使 OH_NN_PERFORMANCE_EXTREME(=4) **不可达**, 与 poc/npu 的核心差异之一
+    //   (POC 一直用 EXTREME)。2026-09-12 放宽到 4; 默认值仍为 3(HIGH), 不改既有行为。
+    void setPerfMode(int m) { perfMode_ = (m < 0 || m > 4) ? 3 : m; }
     int perfMode() const { return perfMode_; }
     const char *cacheDir() const { return cacheDir_; }   // Runner(内部组件)要用
     const char *err() const { return err_; }
@@ -70,8 +72,15 @@ public:
     // y[rows,cols] = softmax(x[rows,cols], axis=1)  (fp32)
     bool softmax(const float *x, float *y, int64_t rows, int64_t cols);
 
-    // y[N,OC,OH,OW] = conv2d(x[N,C,H,W], w[OC,C,KH,KW], bias[OC])
-    //   strides/pads 均为长度为 4 的 NCHW 四元组。OH=(H+2*padH-KH)/strideH+1 同理。
+    // y[n,oh,ow,oc] = conv2d(x[n,ih,iw,c], w[oc,kh,kw,c], bias[oc])   —— 全部 **NHWC**
+    //   ⚠ 权重是 **OHWI** 而非 PyTorch 的 OIHW: NNRt 的 conv2d_builder 取
+    //     inChannel = weightShape[3]、kernelSize = [weightShape[1], weightShape[2]]。
+    //   ⚠ 张量是 **NHWC**(MindIR Conv2DFusion 语义), **不是** PyTorch 的 NCHW:
+    //     传 NCHW 会被读成 N=1,H=C,W=H,C=W, 与权重反推的 inChannel 冲突 ⇒ compBuild rc=1。
+    //   ⚠ **布局重排由调用方在 host 上手工做**(本层不做; 用 permute().contiguous() 会因
+    //     PrivateUse1 上的 aten 拷贝 op 走 fallback 而让子进程消失)。
+    //   strides = [sH,sW] (**rank 2**, 不是 4); pads = [top,bottom,left,right] (rank 4)。
+    //   OH=(H+top+bottom-KH)/sH+1 同理。
     bool conv2d(const float *x, const float *w, const float *bias, float *y,
                 int64_t n, int64_t c, int64_t ih, int64_t iw,
                 int64_t oc, int64_t kh, int64_t kw,

@@ -36,6 +36,7 @@
 #include <cstring>
 #include <memory>
 #include <new>
+#include <atomic>
 #include <vector>
 
 #include "nnrt_engine.h"
@@ -264,7 +265,226 @@ at::Tensor nnrt_mm(const at::Tensor &a, const at::Tensor &b)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ⑥ fallback: 未下沉算子 → 回 CPU 执行(见文件头 坑2: device 参数决定输出归属)
+// ⑥ 算子: aten::_softmax 下沉 NNRt
+//   ⚠ 同 matmul 的教训: `aten::softmax` 是 CompositeImplicitAutograd, 注册它**永远不被调用**;
+//     真正该下沉的是 backend 算子 `aten::_softmax`(composite 的 softmax 会 polyfill 到它)。
+//   P1 约束: fp32 + 2D + 连续 + dim=1/-1(即沿最后一维)。不满足则 TORCH_CHECK 明确报错,
+//     绝不静默退化(静默错值比崩溃更难查 —— 缓存串图那轮的教训)。
+// ─────────────────────────────────────────────────────────────────────────────
+at::Tensor nnrt_softmax(const at::Tensor &x, int64_t dim, bool half_to_float)
+{
+    blog("NNRT-SM enter dim=%lld half=%d", (long long)dim, int(half_to_float));
+    TORCH_CHECK(!half_to_float, "nnrt softmax: P1 不支持 half_to_float");
+    TORCH_CHECK(x.dim() == 2, "nnrt softmax: P1 仅支持 2D, 实际 dim=", x.dim());
+    TORCH_CHECK(x.scalar_type() == at::kFloat, "nnrt softmax: P1 仅支持 float32");
+    TORCH_CHECK(x.is_contiguous(), "nnrt softmax: 需连续张量");
+    const int64_t d = dim < 0 ? dim + x.dim() : dim;
+    TORCH_CHECK(d == 1, "nnrt softmax: P1 仅支持 dim=1(最后一维), 实际 dim=", dim);
+    const int64_t rows = x.size(0), cols = x.size(1);
+    blog("NNRT-SM checks-ok rows=%lld cols=%lld", (long long)rows, (long long)cols);
+    auto y = at::empty(x.sizes(), x.options());
+    auto &e = nnrt::Engine::inst();
+    if (!e.softmax(x.data_ptr<float>(), y.data_ptr<float>(), rows, cols)) {
+        TORCH_CHECK(false, "nnrt softmax 失败: ", e.err());
+    }
+    blog("NNRT-SM done");
+    return y;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ⑦ 算子: aten::convolution 下沉 NNRt
+//   ⚠ 下沉目标**不是** `aten::conv2d`: 它是 structured_delegate(composite), 注册了也不被调用;
+//     真正的 backend 算子是 `aten::convolution`(conv2d 会 polyfill 到它) —— 同 matmul→mm 的
+//     关系。也正因为是 backend 算子, 签名是纯 int[] 而非 SymInt[], 省去符号整数的处理。
+//   P1 约束: fp32 + 4D(NCHW 输入 / OIHW 权重) + 非转置 + groups=1 + dilation=1 + 带 bias。
+//     不满足则 TORCH_CHECK 明确报错(不静默退化 —— 缓存串图那轮的教训)。
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠⚠ **不满足条件时返回未定义张量(而非抛异常)**, 由 nnrtFallback 回 CPU —— 见下方"为什么".
+//   返回定义了的张量 = 下沉成功(结果已在本设备上)。
+//
+// 全局熔断: NNRt 侧一旦失败(2026-09-12 实测 9030 的 conv2d 恒 build-rc=1), 后续不再尝试 ——
+//   否则**每一次卷积**都要白跑一遍"构图→编译失败"并做两次 host 重排, SD 出图会被拖垮。
+//   ⚠ 代价是"某个形状失败 ⇒ 全部形状不再下沉"。对当前情形(设备侧整体不支持)这是对的;
+//     若将来设备支持了, 该失败不再发生, 熔断自然不会被触发。
+std::atomic<bool> g_convSinkEnabled{true};
+
+at::Tensor nnrtConvTry(const at::Tensor &input, const at::Tensor &weight,
+                       const std::optional<at::Tensor> &bias,
+                       const std::vector<int64_t> &stride, const std::vector<int64_t> &padding,
+                       const std::vector<int64_t> &dilation, bool transposed,
+                       const std::vector<int64_t> &output_padding, int64_t groups)
+{
+    if (!g_convSinkEnabled.load(std::memory_order_relaxed)) { return {}; }   // 已熔断
+    blog("NNRT-CONV enter transposed=%d groups=%lld bias=%d",
+         int(transposed), (long long)groups, int(bias.has_value()));
+    blog("NNRT-CONV s1");
+    // 不可下沉的情形一律 **静默回 CPU**(不打 TORCH_CHECK): 这些在 SD 的 UNet 里都是常规形态
+    //   (大量无 bias 的 conv 与 groups≠1 的分组卷积), 抛异常 = 出图必中断。
+    if (transposed) { blog("NNRT-CONV skip transposed"); return {}; }
+    if (groups != 1) { blog("NNRT-CONV skip groups=%lld", (long long)groups); return {}; }
+    if (!bias.has_value()) { blog("NNRT-CONV skip no-bias"); return {}; }
+    blog("NNRT-CONV s2");
+    if (input.dim() != 4 || weight.dim() != 4) { blog("NNRT-CONV skip dim"); return {}; }
+    blog("NNRT-CONV s3");
+    if (input.scalar_type() != at::kFloat || weight.scalar_type() != at::kFloat) {
+        blog("NNRT-CONV skip dtype"); return {};
+    }
+    if (!input.is_contiguous() || !weight.is_contiguous()) { blog("NNRT-CONV skip contig"); return {}; }
+    // ⚠ int[] 参数在 dispatch 之后可能是**单元素广播形式** —— 2026-09-12 实测: `at::conv2d` 的
+    //   默认 `int[2] stride=1` 传到本 kernel 时 size 竟是 **1**(而非 2), 原断言 size==2 直接失败;
+    //   当时还误以为是越界读, 直到把实际 size 打出来才看清(sizeS=1 sizeP=1 sizeD=1)。
+    //   **凡接 int[] 参数, 一律按 1/2 两种长度处理, 不要假设维度数。**
+    const size_t szS = stride.size(), szP = padding.size(), szD = dilation.size();
+    blog("NNRT-CONV s4 sizeS=%zu sizeP=%zu sizeD=%zu", szS, szP, szD);
+    if (!((szS == 1 || szS == 2) && (szP == 1 || szP == 2) && (szD == 1 || szD == 2))) {
+        blog("NNRT-CONV skip int-list-len"); return {};
+    }
+    const int64_t sH = stride[0], sW = szS == 2 ? stride[1] : stride[0];
+    const int64_t pH = padding[0], pW = szP == 2 ? padding[1] : padding[0];
+    const int64_t dH = dilation[0], dW = szD == 2 ? dilation[1] : dilation[0];
+    blog("NNRT-CONV s4b sH=%lld sW=%lld pH=%lld pW=%lld dH=%lld dW=%lld",
+         (long long)sH, (long long)sW, (long long)pH, (long long)pW,
+         (long long)dH, (long long)dW);
+    if (dH != 1 || dW != 1) { blog("NNRT-CONV skip dilation"); return {}; }
+    const int64_t n = input.size(0), c = input.size(1);
+    const int64_t ih = input.size(2), iw = input.size(3);
+    const int64_t oc = weight.size(0), kh = weight.size(2), kw = weight.size(3);
+    if (weight.size(1) != c || bias->numel() != oc) { blog("NNRT-CONV skip shape-mismatch"); return {}; }
+    const int64_t oh = (ih + 2 * pH - kh) / sH + 1;
+    const int64_t ow = (iw + 2 * pW - kw) / sW + 1;
+    blog("NNRT-CONV checks-ok N=%lld C=%lld H=%lld W=%lld OC=%lld KH=%lld KW=%lld -> OH=%lld OW=%lld",
+         (long long)n, (long long)c, (long long)ih, (long long)iw,
+         (long long)oc, (long long)kh, (long long)kw, (long long)oh, (long long)ow);
+    auto y = at::empty({n, oc, oh, ow}, input.options());
+    blog("NNRT-CONV s5 empty-ok");
+    // ⚠⚠ NNRt 的 conv2d 权重约定是 **[OC, KH, KW, C]**(OHWI), **不是** PyTorch 的 OIHW。
+    //   权威依据: build/nnrt-src/frameworks/native/neural_network_runtime/ops/conv2d_builder.cpp
+    //   —— SetChannel 取 inChannel = weightShape[3]、outChannel = weightShape[0];
+    //   SetKernelSize 取 kernelSize = [weightShape[1], weightShape[2]]。
+    //   传 OIHW 的后果**不是报错而是 compBuild 挂起**: 编译器拿到 kernel=[IC,KH]、inChannel=KW
+    //   的自相矛盾图。2026-09-12 实测: 输入 C=2、OIHW [3,2,3,3] → 声明 inChannel=3 与输入
+    //   通道 2 不符, 日志停在 `e3 before-build`, 110s 无 `e4 build-ok`。
+    //   ⚠ poc/npu 的 CONV2D 样本是**全 1 数据 + kH=kW=inC=3**, 布局怎么排结果都一样 ——
+    //     别拿"POC 过了"当反证; 凡尺寸不等的 weight, 布局一错必现。
+    //   ⚠ 转换**必须手工在 host 上做**, 不能用 `weight.permute(..).contiguous()` ——
+    //     PrivateUse1 张量上的拷贝是 aten op, 会走 fallback→CPU redispatch: 2026-09-12 实测
+    //     该写法的表现是 comfy_child 直接消失(日志停在 checks-ok, 无 e0 无 done)。
+    //     引擎接口本就只收裸 float*, 手工重排零 aten op, 是这里唯一安全的做法。
+    std::vector<float> wOhwi((size_t)oc * kh * kw * c);
+    const float *wp = weight.data_ptr<float>();          // OIHW 行主序
+    for (int64_t o = 0; o < oc; o++)
+        for (int64_t h = 0; h < kh; h++)
+            for (int64_t x = 0; x < kw; x++)
+                for (int64_t i = 0; i < c; i++)
+                    wOhwi[((o * kh + h) * kw + x) * c + i] = wp[((o * c + i) * kh + h) * kw + x];
+    blog("NNRT-CONV s6 w-ohwi-ready(%zu)", wOhwi.size());
+    // ⚠⚠ 布局: NNRt 走 MindIR Conv2DFusion, **张量按 NHWC 解读** —— 传 NCHW 的 [1,C,H,W]
+    //   会被读成 N=1,H=C,W=H,C=W, 与权重反推的 inChannel=C 直接冲突。2026-09-12 实测矩阵
+    //   见 bootstrap.cpp 的 CvTry 注释(s2/s4 × nchw/nhwc 四组)。
+    //   故这里做 **NCHW→NHWC 的手工重排**(同 weight: 零 aten op, 不用 permute().contiguous(),
+    //   后者在 PrivateUse1 张量上会 fallback→CPU redispatch 并让子进程消失)。
+    std::vector<float> xNhwc((size_t)n * ih * iw * c);
+    {
+        const float *xp = input.data_ptr<float>();        // NCHW [n,c,ih,iw] 行主序
+        for (int64_t ni = 0; ni < n; ni++)
+            for (int64_t hi = 0; hi < ih; hi++)
+                for (int64_t wi = 0; wi < iw; wi++)
+                    for (int64_t ci = 0; ci < c; ci++)
+                        xNhwc[((ni * ih + hi) * iw + wi) * c + ci] =
+                            xp[((ni * c + ci) * ih + hi) * iw + wi];
+    }
+    // ⚠ strides 是 **rank=2** 的 [sH, sW], **不是** 4 元素 —— 权威依据 build/nnrt-src/.../
+    //   ops/conv2d_builder.cpp 的 SetStrides: 它**不校验 rank**, 按 GetElementCount() 整段拷进
+    //   m_strides 再交给 MindIR_Conv2DFusion; 而单测用 m_stride_dim{2}、GetPrimitive 断言
+    //   GetStride() 返回 {1,1}(2 元素)。传 4 元素 ⇒ 设备侧拿到畸形 stride ⇒ compBuild rc=1。
+    //   (pads 相反: PAD 的 padList 必须是 4 元素, 见 SetPad 的 elementCount != 4 判断。)
+    int64_t st[2] = {sH, sW};
+    int64_t pd[4] = {pH, pH, pW, pW};   // [top,bottom,left,right] 顺序
+    std::vector<float> yNhwc((size_t)n * oh * ow * oc);
+    auto &e = nnrt::Engine::inst();
+    if (!e.ready()) { blog("NNRT-CONV skip engine-not-ready"); return {}; }
+    // ⚠ 下沉失败(如 9030 设备侧不支持 CONV2D, build-rc=1)也**回 CPU**, 不抛异常 ——
+    //   这是 P1 的既定策略: 下沉是加速, 不是正确性的前提。
+    if (!e.conv2d(xNhwc.data(), wOhwi.data(), bias->data_ptr<float>(),
+                  yNhwc.data(), n, c, ih, iw, oc, kh, kw, st, pd)) {
+        g_convSinkEnabled.store(false, std::memory_order_relaxed);
+        blog("NNRT-CONV nnrt-failed -> cpu(并熔断后续尝试): %s", e.err());
+        return {};
+    }
+    // NHWC [n,oh,ow,oc] → NCHW [n,oc,oh,ow] 手工重排(同理, 零 aten op)
+    {
+        float *yp = y.data_ptr<float>();
+        for (int64_t ni = 0; ni < n; ni++)
+            for (int64_t oi = 0; oi < oc; oi++)
+                for (int64_t hi = 0; hi < oh; hi++)
+                    for (int64_t wi = 0; wi < ow; wi++)
+                        yp[((ni * oc + oi) * oh + hi) * ow + wi] =
+                            yNhwc[((ni * oh + hi) * ow + wi) * oc + oi];
+    }
+    blog("NNRT-CONV done");
+    return y;
+}
+
+// ── ⑧b conv 的注册入口: **convolution_overrideable**(不是 convolution!) ────────────────
+// 依据(externals/pytorch-src 的 native_functions.yaml + Convolution.cpp):
+//   conv2d(structured_delegate) / convolution / _convolution **三者都是
+//   `CompositeExplicitAutograd`** —— composite 算子在所有 backend 上都有实现,
+//   **永不进 fallback**,注册它们等于没注册(实测: 注册 convolution 后 c27 仍抛
+//   "convolution_overrideable not implemented", 且日志里连一行 NNRT-FB 都没有)。
+//   真正对"源码外后端(out-of-source backend)"开放的是:
+//     select_conv_backend() 末尾 `else { return ConvBackend::Overrideable; }`
+//       → `at::convolution_overrideable(...)`,其默认实现直接
+//         TORCH_CHECK_NOT_IMPLEMENTED("... please use TORCH_LIBRARY_IMPL to override this function")
+//   —— 这句话就是 PyTorch 给自定义后端留的**官方入口**,本函数注册的正是它。
+//   ⚠ 用 **boxed** 注册(而非 unboxed 函数指针): boxed 直接绑定到已注册 schema,不经过
+//     "从函数指针推断 schema"那一步,少一个出错源;参数从 stack 按 schema 顺序取。
+void nnrtConvBoxed(const c10::OperatorHandle &, c10::Stack *stack)
+{
+    // schema: convolution_overrideable(Tensor, Tensor, Tensor?, SymInt[]×3, bool, SymInt[], SymInt)
+    auto toVec = [](const c10::IValue &v) {
+        std::vector<int64_t> out;
+        if (v.isSymIntList()) {
+            // ListElementReference 不直接暴露 expect_int, 先落到 vector<SymInt> 再取值
+            for (const c10::SymInt &s : v.toSymIntList().vec()) { out.push_back(s.expect_int()); }
+        } else if (v.isIntList()) {
+            out = v.toIntList().vec();
+        }
+        return out;
+    };
+    const at::Tensor input = (*stack)[0].toTensor();
+    const at::Tensor weight = (*stack)[1].toTensor();
+    std::optional<at::Tensor> bias;
+    if (!(*stack)[2].isNone()) { bias = (*stack)[2].toTensor(); }
+    const std::vector<int64_t> st = toVec((*stack)[3]), pd = toVec((*stack)[4]);
+    const std::vector<int64_t> dl = toVec((*stack)[5]), op = toVec((*stack)[7]);
+    const bool transposed = (*stack)[6].toBool();
+    const int64_t groups = (*stack)[8].toInt();
+
+    at::Tensor r = nnrtConvTry(input, weight, bias, st, pd, dl, transposed, op, groups);
+    if (r.defined()) {
+        blog("NNRT-CONV boxed sunk-ok");
+    } else {
+        // 不可下沉 / 下沉失败 → **回 CPU**。
+        //   ⚠ 不能借用其它算子的 fallback redispatch: CPU 上的 convolution_overrideable
+        //     就是那个"未实现"的默认实现, redispatch 过去照样抛异常。
+        //     要真正回 CPU, 必须让 select_conv_backend **按 CPU 重新选 backend** —— 那取决于
+        //     **输入张量本身的 device**, 所以先把输入拷成 CPU 张量, 再调 at::conv2d
+        //     (CPU 上它选 Slow2d/Slow3d/Mkldnn 等真实实现, 不会再落回 Overrideable)。
+        auto ci = retagToCpu(input);
+        auto cw = retagToCpu(weight);
+        std::optional<at::Tensor> cb;
+        if (bias.has_value()) { cb = retagToCpu(*bias); }
+        blog("NNRT-CONV boxed -> cpu(slow path)");
+        r = transposed ? at::conv_transpose2d(ci, cw, cb, st, pd, op, groups, dl)
+                       : at::conv2d(ci, cw, cb, st, pd, dl, groups);
+    }
+    // boxed kernel 约定: 返回时 stack 里**只留返回值**(参数已被消费)
+    stack->clear();
+    stack->push_back(r);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ⑧ fallback: 未下沉算子 → 回 CPU 执行(见文件头 坑2: device 参数决定输出归属)
 // ─────────────────────────────────────────────────────────────────────────────
 // ⚠ c10::Type::castRaw<T>() 不是安全的向下转型: 它 = static_cast, 既不校验 kind 也不返回
 //   null。曾经写成 `if (auto *o = t->castRaw<OptionalType>())` —— 对任何类型都"成立",
@@ -390,6 +610,26 @@ void registerBackend()
     if (!at::isPrivateUse1HooksRegistered()) {
         at::RegisterPrivateUse1HooksInterface(&g_hooks);
     }
+    // ⚠ conv 的注册**必须放在运行时**而不是 TORCH_LIBRARY_IMPL 里:
+    //   静态注册的异常**无法捕获**, 会让整个扩展 dlopen 失败 —— 表现是"子进程起来了但
+    //   什么日志都没有"(2026-09-12 实测: 连 `NNRT-P0A s1 register-entered` 都没写, 而
+    //   napi.log 显示 startComfyChild rc=0)。放这里失败也能留痕。
+    //   分段日志(a/b/c/d)是必需的: 2026-09-12 上一版只打一条"注册完成", 结果崩在
+    //   哪一步完全看不出来(表现为日志停在 registerBackend 之前一行、无异常)。
+    blog("NNRT-B s-conv a: enter");
+    try {
+        static auto lib = torch::Library(torch::Library::IMPL, "aten",
+                                         std::make_optional(c10::DispatchKey::PrivateUse1),
+                                         __FILE__, __LINE__);
+        blog("NNRT-B s-conv b: library-constructed");
+        lib.impl("convolution_overrideable",
+                 torch::CppFunction::makeFromBoxedFunction<&nnrtConvBoxed>());
+        blog("NNRT-B s-conv c: conv-registered(convolution_overrideable)");
+    } catch (const std::exception &e) {
+        blog("NNRT-B s-conv d: register FAILED: %s", e.what());
+    } catch (...) {
+        blog("NNRT-B s-conv d: register FAILED(unknown)");
+    }
 }
 
 } // namespace nnrt_backend
@@ -398,6 +638,8 @@ TORCH_LIBRARY_IMPL(aten, PrivateUse1, m)
 {
     // mm = 真正的 backend 算子(2D 矩阵乘)。torch.matmul 会 polyfill 到这里。
     m.impl("mm", &nnrt_mm);
+    m.impl("_softmax", &nnrt_softmax);
+    // ⚠ conv **不在此注册**: 见 registerBackend() 里的运行时注册段(静态注册失败会拖垮 dlopen)。
 }
 
 TORCH_LIBRARY_IMPL(_, PrivateUse1, m)
