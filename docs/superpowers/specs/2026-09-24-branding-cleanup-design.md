@@ -112,12 +112,14 @@ deploy_environment`）。默认开启（`coreSettings.ts:479-484`）⇒ localhos
 （功能性 —— 用户需要知道 key 从哪来）。改法：`showSignInDialog` 的 `headerComponent`
 不再指向 `ComfyOrgHeader`（组件保留原地不删）。
 
-### 3.2.1 可选：partner gate 文案残留
+### 3.2.1 partner gate 文案残留（决策：不处理）
 
 partner gate 链路仍可达（正确 —— 官方 API 节点保留）：工作流含 `api_node` 且未配 key 时，
 Run 按钮显示 `Sign in to run`，点击弹 `ApiNodesSignInContent`（文案
 `Sign in to run partner nodes`）。门控后已无 "sign in" 语义，实际动作是填 key。
-**功能通**（点 Sign In → 打开 API Key 表单），仅文案不匹配。属可选 i18n 优化。
+
+**决策（2026-09-25）**：不改。功能是通的（点 Sign In → 打开 API Key 表单）；改 i18n 会
+增加与上游的差异面，而该问题只在「含官方 API 节点 + 未配 key」时才撞见。
 
 ### 3.3 切生产配置
 
