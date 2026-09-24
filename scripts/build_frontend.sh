@@ -48,14 +48,24 @@ if [ "$SKIP_INSTALL" = 0 ] || [ ! -d node_modules ]; then
   pnpm install --frozen-lockfile
 fi
 
-echo "[build] pnpm build(typecheck + vite)..."
-pnpm build
+# 2026-09-25: USE_PROD_CONFIG=true 使前端基址指向生产(api.comfy.org / dreamboothy)。
+#   必须: API Key 保存时前端调 authStore.createCustomer() → buildApiUrl('/customers'),
+#   基址由 comfyui-frontend 的 comfyApi.ts:15-17 依此开关决定; 不切则打到
+#   stagingapi.comfy.org, 用户从 comfy.org 官网取得的生产 key 会被拒。
+#   详见 docs/superpowers/specs/2026-09-24-branding-cleanup-design.md §3.3
+echo "[build] pnpm build(typecheck + vite) [USE_PROD_CONFIG=true]..."
+USE_PROD_CONFIG=true pnpm build
 
 # ── 产物断言(失败必须非零退出; 禁止"缺关键文件仍继续") ──
 [ -f dist/index.html ] || { echo "FATAL: 产物缺 dist/index.html"; exit 1; }
 [ -d dist/assets ] || { echo "FATAL: 产物缺 dist/assets"; exit 1; }
 N_JS=$(find dist/assets -name '*.js' | wc -l)
 [ "$N_JS" -gt 0 ] || { echo "FATAL: dist/assets 无 .js"; exit 1; }
+# 2026-09-25: 生产配置生效断言 —— 防"USE_PROD_CONFIG 没传进去"这类静默失败。
+#   API Key 校验请求打 staging 时会被拒, 症状隐蔽, 故在此硬断言。
+grep -rq "api\.comfy\.org" dist/assets/*.js || { echo "FATAL: 产物未见 api.comfy.org — USE_PROD_CONFIG 未生效"; exit 1; }
+grep -rq "stagingapi\.comfy\.org" dist/assets/*.js && { echo "FATAL: 产物仍含 stagingapi.comfy.org"; exit 1; }
+echo "[OK] 生产配置已生效(api.comfy.org)"
 grep -q "NIGHTLY" dist/index.html 2>/dev/null && echo "WARN: dist 含 NIGHTLY 标记(异常, 应无)"
 echo "{ \"source\": \"assert\", \"tag\": \"$FE_TAG\", \"commit\": \"$FE_DESC\", \"buildJs\": $N_JS }" > dist/VERSION.txt
 echo "[OK] dist 就绪: $(du -sh dist | awk '{print $1}') assets=$N_JS version=$FE_TAG@$FE_DESC"
