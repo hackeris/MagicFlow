@@ -1,20 +1,31 @@
-# 品牌正名与云登录面切除
+# 品牌正名 + 账号登录面门控（保留 API Key 能力）
 
-> 2026-09-24 设计稿。本文是 `docs/comfyui-branding-audit.md` 的**执行设计**与**部分推翻**——
-> 该审计清单写于 2026-09-08，多项结论已被代码演进推翻，需一并更新。
+> 2026-09-24 起草，2026-09-25 定稿。
+> 本文是 `docs/comfyui-branding-audit.md` 的执行设计，并对该清单的部分结论作修正。
 
 ## 1. 决策
 
-**切除官方账号登录面**（登录入口、User 面板登录块、充值入口、partner gate、
-官方 API 节点），**品牌正名为「梦幻之流」**。
+1. **砍掉账号登录体系**（OAuth / 邮箱密码 / 注册 / 订阅 / 充值）——**门控切断触达，不删代码**
+2. **保留 API Key 能力** —— 官方 259 个 API 节点照常可用
+3. **品牌正名为「梦幻之流」**
+4. **切生产配置**（`USE_PROD_CONFIG=true`）—— API Key 验证的前提，见 §3.3
 
-**用户的外部 API 需求不靠这条路满足**：W4 已交付自研 `OHOS_API_Text/Image/HTTP`
-三节点 + 自研密钥端点（`GET/POST /ohos/apikeys`）。用户自己填第三方 key（含
-api.comfy.org 的 key），**由后端发请求**，网络可达性由用户自行解决。这条路与前端
-登录 UI 无关，因此切除登录面**不损失外部 API 能力**。
+### 1.1 关键区分：API Key ≠ 账号登录
 
-**因此不切生产配置**（`USE_PROD_CONFIG=true`）——该开关的唯一价值是让 comfy.org
-正式账号能登录；登录既然不保留，切它无意义。
+这是本设计的立足点，有代码为证：
+
+| | 账号登录 | API Key |
+|---|---|---|
+| 依赖 | Firebase（Google 服务）+ OAuth 弹窗 | 仅一个 `X-API-KEY` 头 |
+| 存储 | Firebase session | `localStorage['comfy_api_key']`（`apiKeyAuthStore.ts:15`）|
+| 判定 | `firebaseUser !== null` | `isApiKeyLogin = apiKeyStore.isAuthenticated && firebaseUser.value === null`（`useCurrentUser.ts:18-19`）|
+| 相互关系 | — | **与 Firebase 互斥**（同上），全程不碰 Google |
+
+且 `SignInContent.vue:101` 的 API Key 入口按钮本就包在 `v-if="!isCloud"` 里 ——
+**官方专门为非云构建留的路径**。`turnstile.ts` 注释也写明 OSS/localhost 有
+"server-side loopback exemption covers local signup"。
+
+⇒ 砍掉账号登录**不会**伤及 259 个 API 节点。
 
 ## 2. 复核结论（审计清单的实际状态）
 
@@ -24,99 +35,110 @@ api.comfy.org 的 key），**由后端发请求**，网络可达性由用户自�
 
 | 项 | 审计原文 | 实际状态 | 证据 |
 |---|---|---|---|
-| D1 Datadog RUM | "必改，隐私底线" | **已消解** | `src/bootstrap.ts` 的调用被 `if (__DISTRIBUTION__ === 'cloud')` 包裹，我们是 localhost ⇒ **编译期死分支**。产物验证：`dist/assets/*.js` 搜不到 `prod-v2`、`resolveDeployEnv`、clientToken。另 `initDatadogRum.ts:64-83` 有 hostname 白名单兜底 |
-| D2 遥测 providers | "确认随 D1 一并废除" | **已消解** | `src/platform/telemetry/providers/cloud/` 下 9 个 provider 只在 `initTelemetry.ts` 内动态 import，该函数首行即 `if (!IS_CLOUD_BUILD) return`（`:9,19`）；`main.ts:52-54` 调用点也被 `isCloud` 包裹。**无一个是无条件执行的** |
-| E1 云功能 UI | "确认 isCloud 门控" | **已消解** | `src/router.ts:25-28,61` 的 `cloudOnboardingRoutes` 非 cloud 下为空数组，`/cloud/*` 不注册。残留仅"设置里 PlanCredits 面板的旧版账单 UI" |
+| D1 Datadog RUM | "必改，隐私底线" | **已消解** | `src/bootstrap.ts` 调用被 `if (__DISTRIBUTION__ === 'cloud')` 包裹，我们是 localhost ⇒ **编译期死分支**。产物验证：`dist/assets/*.js` 搜不到 `prod-v2`、`resolveDeployEnv`、clientToken。另 `initDatadogRum.ts:64-83` 有 hostname 白名单兜底 |
+| D2 遥测 providers | "确认随 D1 一并废除" | **已消解** | 9 个 provider 只在 `initTelemetry.ts` 内动态 import，该函数首行即 `if (!IS_CLOUD_BUILD) return`（`:9,19`）；`main.ts:52-54` 调用点也被 `isCloud` 包裹。**无一个是无条件执行的** |
+| E1 云功能 UI | "确认 isCloud 门控" | **已消解** | `router.ts:25-28,61` 的 `cloudOnboardingRoutes` 非 cloud 下为空数组，`/cloud/*` 不注册 |
 
 ### 2.2 审计文档漏记项
 
 `GraphCanvas.vue:594` → `releaseStore.initialize()`：**启动后自动发出**
-`GET {api}/release-notes/…`，参数含 `current_version / form_factor / locale /
-deploy_environment`（`src/platform/updates/common/releaseStore.ts:249-284`）。
-拦截条件 `if (!isCloud && !showVersionUpdates) return`，而
-`Comfy.Notification.ShowVersionUpdates` 默认 **true**
-（`src/platform/settings/constants/coreSettings.ts:479-484`）⇒ localhost 下**启动即外发**。
-审计文档未记录此项。
+`GET {api}/release-notes/…`（参数含 `current_version / form_factor / locale /
+deploy_environment`）。默认开启（`coreSettings.ts:479-484`）⇒ localhost 下**启动即外发**。
 
-### 2.3 切除对象 —— 这些在 localhost 下真实可达
+### 2.3 门控对象 —— 这些在 localhost 下真实可达
 
 | 项 | 位置 | 现象 |
 |---|---|---|
-| 顶栏登录按钮 | `TopMenuSection.vue:87`、`WorkflowTabs.vue:121` | **无门控**，点开即官方登录对话框（Google/GitHub/邮箱 + Turnstile）。`main.ts:74` 还无条件初始化 Firebase |
-| 登录对话框 | `src/components/dialog/content/signin/` | 内含 comfy.org 条款/隐私/hello@comfy.org；**打开即探测** `cloud.comfy.org/cdn-cgi/trace`（`useRegionGate.ts:15-19` → `networkUtil.ts:17`） |
+| 顶栏登录按钮 | `TopMenuSection.vue:87`、`WorkflowTabs.vue:121` | **无门控**，点开即官方登录对话框。`main.ts:74` 还无条件初始化 Firebase |
+| 登录对话框 | `src/components/dialog/content/signin/` | 含 OAuth / 邮箱密码 / 注册；**打开即探测** `cloud.comfy.org/cdn-cgi/trace`（`useRegionGate.ts:15-19`）|
+| 对话框标题 | `dialogService.ts:245,251` → `ComfyOrgHeader.vue` | 标题栏是 ComfyOrg logo |
 | User 设置面板 | `useSettingUI.ts:140-149` | **无条件注册**，未登录时显示「Sign in / Sign up」 |
-| 充值入口 | `CurrentUserPopoverLegacy.vue:92-100` | 可打开 `TopUpCreditsDialogContentLegacy`（comfy.org/cloud/enterprise 链接） |
-| partner gate / 教育卡 | `usePartnerNodesRunGate.ts`、`GraphView.vue:28` | `PartnerNodesEducationCard v-if="!isCloud"`——**官方专门在非云构建显示**；`partnerRunGateEnabled` 默认 true ⇒ 图含官方 API 节点时 Run 按钮变 "Sign in to run" |
+| 订阅/充值区块 | `CurrentUserPopoverLegacy.vue:73,92-100,106-115,118` | 由 `canAccessSubscriptionFeatures`（localhost 恒 true）与 `showAddCredits` 控制 |
 | "Update ComfyUI" 菜单 | `HelpCenterMenuContent.vue:404-415` | 门控 `!isDesktop && !isCloud` **恰好命中 localhost** |
 | 窗口标题 | `useBrowserTabTitle.ts:12-13` | 兜底 `'ComfyUI'` + 后缀 `' - ComfyUI'` |
-| 首屏大字 | `UserSelectView.vue:7` | `<h1>ComfyUI</h1>`（我们后端非 multi-user ⇒ 实际不可达，但文案仍在） |
+| 首屏大字 | `UserSelectView.vue:7` | `<h1>ComfyUI</h1>` |
 
-**后端侧确认**：`init_api_nodes=not args.disable_api_nodes` 在 `patches/comfyui-src-ohos-changes.patch:527`
-中是**上下文行**（非我们的改动），启动参数 `phase0|127.0.0.1|8188|--cpu|pyroot=…`
-未带 `--disable-api-nodes` ⇒ **官方 37 组 API 节点确实加载**，上述 partner gate 真能撞上。
+**后端侧确认**：`init_api_nodes=not args.disable_api_nodes` 在
+`patches/comfyui-src-ohos-changes.patch:527` 中是**上下文行**（非我们的改动），
+启动参数未带 `--disable-api-nodes` ⇒ 官方 API 节点确实加载。
+
+**本次明确不加 `--disable-api-nodes`** —— 它会卸载 259 个 API 节点并加 CSP 阻断外联
+（`server.py:488-500`），与「保留 API Key 能力」直接冲突。
 
 ## 3. 改动设计
 
-### 3.1 后端参数层 —— 一个参数解决三项
+**总原则（用户指示 2026-09-25）**：让相关逻辑**无法生效、无法被用户触达**即可，
+**不在代码里真删**。全部改动为「门控」，保持可逆、降低上游升级冲突。
 
-`entry/src/main/ets/pages/Index.ets:162` 加参数：
+### 3.1 账号登录面门控（4 处）
 
-```ts
-const entryParams = `phase0|127.0.0.1|8188|--cpu|--disable-api-nodes|pyroot=${pyroot}`;
-```
-
-官方为离线部署设计的开关（`comfy/cli_args.py:214`），三层防护：
-
-| 层 | 机制 | 解决 |
-|---|---|---|
-| 后端 | 不加载 37 组官方 API 节点 | ⇒ 前端 `usePartnerNodesInGraph` 检测不到 `api_node` ⇒ **partner gate / 教育卡 / "Sign in to run" / 价格徽标全部自然失效，无需为此改前端** |
-| 网络 | CSP `connect-src 'self' data:`（`server.py:488-500`） | ⇒ 前端 JS **内核级禁止外联**：兜住 `cloud.comfy.org` 地区探测、`api.comfy.org` 注册表、`media.comfy.org` 视频 |
-| 前端 | `releaseStore.ts:260` 读 argv 后 `return` | ⇒ release notes 拉取**主动跳过** |
-
-**已验证不影响**：
-- 自研 `OHOS_API_*` 节点落在 `custom_nodes/ohos_external_api/`，走 `init_custom_nodes`
-  路径 ⇒ 不受 `init_api_nodes` 影响
-- 自研节点由**后端** Python 发请求 ⇒ 不受前端 CSP 影响
-- `verify_smoke.sh` 的 W4 判据查 `/object_info` 含 `OHOS_API_Text|Image|HTTP` ⇒ 零回归
-
-**代价**：节点面板少 37 组官方 API 节点——它们在本地**本就是死路**（需 comfy.org 账号
-token，而 token 由前端登录态注入）。
-
-### 3.2 前端 fork 改动
-
-| # | 项 | 位置 | 改法 |
+| # | 位置 | 改法 | 效果 |
 |---|---|---|---|
-| 1 | 顶栏登录按钮 | `TopMenuSection.vue:87`、`WorkflowTabs.vue:121` | 不渲染 |
-| 2 | User 设置面板 | `useSettingUI.ts:140-149` | 摘除注册，腾出的位置改挂**「关于」面板** |
-| 3 | 充值入口 | `CurrentUserPopoverLegacy.vue:92-100` | 不渲染 |
-| 4 | "Update ComfyUI" 菜单 | `HelpCenterMenuContent.vue:404-415` | 不渲染 |
-| 5 | 窗口标题 | `useBrowserTabTitle.ts:12-13` | `'ComfyUI'` → `'梦幻之流'`；后缀 `' - ComfyUI'` → `' - 梦幻之流'` |
-| 6 | 首屏大字 | `UserSelectView.vue:7` | `ComfyUI` → `梦幻之流` |
-| 7 | 「关于」面板（新建） | 取代 #2 腾出的注册位 | 「基于 ComfyUI 构建 · GPL-3.0」+ 后端版本号 |
+| 1 | `SignInContent.vue:196` | `showApiKeyForm = ref(false)` → `ref(true)` | 对话框打开即显示 API Key 表单；`v-else` 整块（登录/注册/SSO/邮箱）**永不渲染** |
+| 2 | `signin/ApiKeyForm.vue:69-72` | back 按钮加门控（`:70`） | `@back` 的目标是被砍掉的账号登录分支，按钮已无去处；留着即为坏 UX |
+| 3 | `CurrentUserPopoverLegacy.vue:189` | `canAccessSubscriptionFeatures` 在该文件内覆盖为 `false` | **一处改动使 L73 / L106 / L118 三处订阅区块同时失效**。（不改其定义处 `useSubscription.ts:50-54`——那里被 cloud 组件共用，影响面过大） |
+| 4 | `useSettingUI.ts:140-149` | User 面板从注册表摘除，位置改挂「关于」面板 | 移除账号面板入口，同时落实 §3.4 的合规声明 |
 
-**#7 的落点说明**：复用 User 面板腾出的注册位（设置 → General 组），既移除登录块，
-又给合规声明一个用户可达的入口，无需新造入口。
+**保留不动**（它们是 API Key 能力的一部分）：
+- 顶栏 `LoginButton` / `CurrentUserButton`（反映 key 是否已配置）
+- `CurrentUserPopover` 的 Logout（`CurrentUserPopoverLegacy.vue:145`）—— 清除 key 的唯一入口
+- `ApiKeyForm.vue` 主体
+- `main.ts:74` Firebase 初始化（`initializeApp` 不发网络请求）
+- `useCoreCommands.ts:1010` 的 `OpenSignInDialog` 命令（复用为 API Key 对话框入口）
+- `signin/` 与 `platform/cloud/` 目录全部留原地
 
-**「不渲染」的实现约定**：在 fork 源码中**移除挂载点/注册项**，而非运行时
-`v-if="false"` 隐藏 —— 后者会在升级上游时留下难以察觉的死代码。命令层同理：
-`useCoreCommands.ts:1010-1017` 的 `Comfy.User.OpenSignInDialog` 在入口全堵死后已无
-触发点，一并移除注册。
+**已知残留（本次不处理）**：`SignInContent.vue:248` 的 `useRegionGate()` 在对话框挂载时
+会探测 `cloud.comfy.org/cdn-cgi/trace` + google/baidu。它不含个人信息、失败即静默，
+且与账号登录无关。留作观察项。
 
-**保留**：Help 菜单的 `docs.comfy.org` / Discord / GitHub / Forum / Support 外链 ——
-用户**主动点击**的生态入口，去掉伤可用性；且 `window.open` 不受 `connect-src` 限制
-（CSP 管资源加载，不管导航）。
+### 3.2 对话框标题
 
-### 3.3 关闭 release notes 自动拉取（双保险）
+`dialogService.ts:245,251` 把该对话框的标题设为 `ComfyOrgHeader`（ComfyOrg logo）。
+账号登录既然整体门控，标题也应中性化，与 §3.4 品牌正名一贯。
 
-`src/platform/settings/constants/coreSettings.ts:479-484`：
-`Comfy.Notification.ShowVersionUpdates` 的 `defaultValue` 由 `true` 改为 `false`。
+改法：`showSignInDialog` 的 `headerComponent` 不再指向 `ComfyOrgHeader`（组件保留原地不删）。
 
-理由：3.1 的 argv 检查已覆盖，但那是**依赖后端参数**的间接机制；显式改默认值使其
-在参数缺失时也不会外发。改动一行，值得。
+### 3.3 切生产配置
 
-### 3.4 应用图标（程序生成）
+`scripts/build_frontend.sh` 的构建命令加 `USE_PROD_CONFIG=true`。
 
-现有资源全部是 DevEco 脚手架模板图（蓝色圆角方块 + 四个白色小方块，2026-08-20 时间戳，
+**为什么必做**：API Key 保存时前端调 `authStore.createCustomer()` →
+`buildApiUrl('/customers')`，基址由 `getComfyApiBaseUrl()` 决定 =
+`__USE_PROD_CONFIG__ ? 'https://api.comfy.org' : 'https://stagingapi.comfy.org'`
+（`comfyApi.ts:15-17`）。当前构建落到 **staging**，用户的**生产 key 会被拒**。
+
+注意两侧基址是**分开**的：
+
+| 环节 | 走哪 | 受控于 |
+|---|---|---|
+| 前端校验 key（`createCustomer`） | 当前 staging ⇒ 需切 | `__USE_PROD_CONFIG__`（构建期） |
+| 后端节点实际调用 | **已是 `api.comfy.org`**（`cli_args.py:262-265` 默认值） | `--comfy-api-base`（启动参数） |
+
+**不受影响**：Turnstile 人机验证 —— `turnstile.ts:34-37` 中 `!isCloudBuild` 直接返回
+`''`，localhost 构建不渲染该组件（服务端 loopback 豁免）。
+
+### 3.4 品牌正名
+
+| # | 位置 | 改法 |
+|---|---|---|
+| 1 | `useBrowserTabTitle.ts:12-13` | 兜底 `'ComfyUI'` → `'梦幻之流'`；后缀 `' - ComfyUI'` → `' - 梦幻之流'` |
+| 2 | `UserSelectView.vue:7` | `<h1>ComfyUI</h1>` → `<h1>梦幻之流</h1>` |
+| 3 | 设置面板（取代 User 面板注册位，见 §3.1 #4） | 「关于」项：「基于 ComfyUI 构建 · GPL-3.0」+ 后端版本号 |
+
+#3 的理由：README 已声明衍生关系（`README.md:105,109-110`），但**设备上看不到 README**。
+GPL-3.0 衍生作品分发时应有可达的版权声明。
+
+### 3.5 关闭 release notes 自动拉取
+
+`coreSettings.ts:479-484`：`Comfy.Notification.ShowVersionUpdates` 的 `defaultValue`
+由 `true` 改为 `false`。
+
+理由：非 API Key 能力的一部分；本应用前后端版本锁定（v1.54.4 / 0.34.0），提示了也无法更新。
+API Key、节点、主动触发的请求均不受影响。
+
+### 3.6 应用图标（程序生成）
+
+现有资源全部是 DevEco 脚手架模板图（蓝色圆角方块 + 四个白色小方块，2026-08-20，
 从未更换）：
 
 | 文件 | 尺寸 | 用途 |
@@ -126,40 +148,40 @@ token，而 token 由前端登录态注入）。
 | `AppScope/resources/base/media/{background,foreground}.png` | 1024×1024 | 同上 |
 
 改用首页视觉语言（`Index.ets`）：深空渐变底 `#0A0E1E→#3B2A78` + 紫蓝渐变圆
-`#8B5CF6→#4F46E5` + 星光符号。PIL 生成（环境已有 12.2.0）。
-
-注：程序生成的简洁图标，非专业设计。
+`#8B5CF6→#4F46E5` + 星光符号。PIL 生成（环境已有 12.2.0）。程序生成的简洁图标，非专业设计。
 
 ## 4. 明确不做
 
-- 不物理删除 `signin/`、`platform/cloud/` 等云组件目录（保持"精准切除"）
-- 不改 Help 菜单的官方文档/社区外链
+- 不删除 `signin/`、`platform/cloud/` 等任何云组件代码（门控即可）
+- 不加 `--disable-api-nodes`
+- 不改 Help 菜单的官方文档/社区外链（用户主动点击的生态入口）
 - 不动 `Index.ets` 的 47 处硬编码颜色
-- **不切生产配置**（`USE_PROD_CONFIG`）——见 §1
-- 不改后端 Python 代码（本次改动限于：启动参数一行 + 前端 fork + 图标资源）
+- 不改后端 Python 代码
 
 ## 5. 验证计划
 
 | # | 验证 | 判据 |
 |---|---|---|
-| 1 | 后端参数效果（宿主预验证，快） | 加参数跑后端：`curl -I` 确认响应含 CSP 头；`/object_info` 中官方 API 节点消失、`OHOS_API_*` 仍在 |
-| 2 | **真机熔断点：WebSocket** | CSP 的 `connect-src 'self'` 理论上覆盖同源 `ws://127.0.0.1:8188/ws`，**必须实测**。若被误伤 ⇒ 退回"只关 API 节点 + 改前端 gate"路线（此时外联阻断改由 §3.3 与 fork 门控承担，失去内核级兜底） |
-| 3 | 前端构建 | `pnpm build` 通过 |
-| 4 | 打包 | `make hap` BUILD SUCCESSFUL + prebuilt 325 文件闭环 PASS |
-| 5 | 真机 UI | 截图：顶栏无登录按钮、窗口标题正确、设置里有「关于」项、图标已换 |
-| 6 | 零回归 | `verify_smoke.sh --port 8191` 12 项 ALL PASS |
-| 7 | 外发关闭 | 启动后确认无 `release-notes` 请求 |
+| 1 | 前端构建 | `pnpm build` 通过；产物中可搜到 `api.comfy.org` |
+| 2 | 打包 | `make hap` BUILD SUCCESSFUL + prebuilt 325 文件闭环 PASS |
+| 3 | **API Key 链路（核心）** | 真机粘贴一个 comfy.org key → 保存成功、顶栏变已登录态；`/object_info` 中官方 API 节点在列；跑一个 API 节点确认 `X-API-KEY` 头生效 |
+| 4 | 账号登录不可达 | 截图确认：对话框只有 API Key 表单；无 OAuth/注册/SSO 按钮；设置里无 User 面板；顶栏用户菜单无充值/订阅项 |
+| 5 | 零回归 | `verify_smoke.sh --port 8191` 12 项 ALL PASS |
+| 6 | 外发关闭 | 启动后确认无 `release-notes` 请求 |
+
+**#3 需要你配合**：一个可用的 comfy.org API key（或你自行验证）。
 
 ## 6. 风险
 
 | 风险 | 说明 | 应对 |
 |---|---|---|
-| CSP 误伤 WebSocket | 核心链路，断了整个应用废掉 | 列为**熔断点**（验证 #2），先于其他改动验证 |
-| CSP 误伤其他前端能力 | `img-src 'self'` 阻断外部图片、`frame-src 'self'` 阻断外部 iframe | 验证阶段观察；如有需要，可在 fork 中调整该中间件的 CSP 串 |
+| `canAccessSubscriptionFeatures` 局部覆盖 | 只改 `CurrentUserPopoverLegacy.vue` 内引用，不改定义处 | 实施时确认该文件内无其它依赖此值的逻辑分支 |
+| 门控点遗漏 | 账号登录可能有未发现的触发路径 | 验证 #4 以「运行时不可达」为准（截图 + 点击穷举），不以"改了代码"为准 |
 | 前端 pin/锚同步 | dist 变化 ⇒ `config/externals.pins.tsv` 锚必须同升（fork 纪律：`fetch_externals` 会 checkout 回旧 pin，静默吞掉改动） | 按既有 pin 流程同步 |
+| 上游升级冲突 | 门控改动落在官方文件上 | 每处改动加注释说明意图，降低下次升级的误删风险 |
 
 ## 7. 文档同步
 
 - `docs/comfyui-branding-audit.md`：D1/D2/E1 改标已消解（附证据）；补录 release notes 项；
-  B 类按 §2.3 更新为"确认可达"
+  **新增一节**记录「保留 API Key 能力是有意决策」，防止后来者照旧清单误清理
 - `docs/status-and-next.md`：§3 表格 ⑦ 行更新
