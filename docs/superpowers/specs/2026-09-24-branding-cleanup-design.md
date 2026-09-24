@@ -93,10 +93,31 @@ deploy_environment`）。默认开启（`coreSettings.ts:479-484`）⇒ localhos
 
 ### 3.2 对话框标题
 
-`dialogService.ts:245,251` 把该对话框的标题设为 `ComfyOrgHeader`（ComfyOrg logo）。
-账号登录既然整体门控，标题也应中性化，与 §3.4 品牌正名一贯。
+**该对话框的性质**：`dialogService.showSignInDialog()` 的容器（key = `'global-signin'`）
+原本是**通用登录对话框**，5 个调用点中门控后仍可达 3 个（顶栏 LoginButton、
+`ApiNodesSignInContent.onLogin`、`OpenSignInDialog` 命令）。由于 `SignInContent` 只剩
+`ApiKeyForm` 分支（§3.1 #1），它实际已变成**「填 Comfy API Key」专用对话框**。
 
-改法：`showSignInDialog` 的 `headerComponent` 不再指向 `ComfyOrgHeader`（组件保留原地不删）。
+**标题组件的性质**：`ComfyOrgHeader.vue` 整个组件只有一张 32×32 的 ComfyOrg logo
+（`comfy-logo-single.svg`，无文字）—— 是账号登录时代的**纯装饰**。
+而 `ApiKeyForm` **自带完整内层内容**：
+
+| key | 文案 |
+|---|---|
+| `auth.apiKey.title` | `API Key` |
+| `auth.apiKey.description` | `Use your Comfy API key to enable API Nodes` |
+| `auth.apiKey.generateKey` | `Get one here` → 链到 `{comfyPlatformBaseUrl}/login` |
+
+**处置**：去掉外层 logo 标题（装饰，零信息损失）；**保留表单内的 comfy.org 引用**
+（功能性 —— 用户需要知道 key 从哪来）。改法：`showSignInDialog` 的 `headerComponent`
+不再指向 `ComfyOrgHeader`（组件保留原地不删）。
+
+### 3.2.1 可选：partner gate 文案残留
+
+partner gate 链路仍可达（正确 —— 官方 API 节点保留）：工作流含 `api_node` 且未配 key 时，
+Run 按钮显示 `Sign in to run`，点击弹 `ApiNodesSignInContent`（文案
+`Sign in to run partner nodes`）。门控后已无 "sign in" 语义，实际动作是填 key。
+**功能通**（点 Sign In → 打开 API Key 表单），仅文案不匹配。属可选 i18n 优化。
 
 ### 3.3 切生产配置
 
