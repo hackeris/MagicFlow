@@ -77,7 +77,13 @@ deploy_environment`）。默认开启（`coreSettings.ts:479-484`）⇒ localhos
 | 1 | `SignInContent.vue:196` | `showApiKeyForm = ref(false)` → `ref(true)` | 对话框打开即显示 API Key 表单；`v-else` 整块（登录/注册/SSO/邮箱）**永不渲染** |
 | 2 | `signin/ApiKeyForm.vue:69-72` | back 按钮加门控（`:70`） | `@back` 的目标是被砍掉的账号登录分支，按钮已无去处；留着即为坏 UX |
 | 3 | `CurrentUserPopoverLegacy.vue:189` | `canAccessSubscriptionFeatures` 在该文件内覆盖为 `false` | **一处改动使 L73 / L106 / L118 三处订阅区块同时失效**。（不改其定义处 `useSubscription.ts:50-54`——那里被 cloud 组件共用，影响面过大） |
-| 4 | `useSettingUI.ts:140-149` | User 面板从注册表摘除，位置改挂「关于」面板 | 移除账号面板入口，同时落实 §3.4 的合规声明 |
+| 4 | `useSettingUI.ts`：`panels`（L253-262）**与** `workspaceMenuTreeNodes`（L304-338） | 新增 `showAccountPanels` 开关，**同时**门控这两处 | 移除账号面板入口。★ **两处必须同门控**：只切 `panels` 会让导航里仍列着 "User" / 登录后 "Plan & Credits"，而内容区 `findPanelByKey` 返回 null ⇒ **点进去是空白**（2026-09-25 实施中发现的真实缺口）。「关于」面板 `aboutPanel` 本就注册在 `panels` 首位，无需新建 |
+| 5 | `HelpCenterMenuContent.vue:404-415` | "Update ComfyUI" 菜单项加门控 | 原条件 `!isDesktop && !isCloud && isNewManagerUI` **恰好命中 localhost**；但本应用后端随 HAP 打包、版本锁定，该更新入口点了无意义（2026-09-25 核对 §2.3 与 §3.1 时发现漏入清单） |
+| 6 | `CurrentUserPopoverLegacy.vue:129-133` | "Account settings" 行加 `v-if="false"` | 它指向已被门控的 User 面板；不切的话设置会**落在首个分类而非目标**（不是空白，但同属坏体验）。2026-09-25 复核实施报告时补入 |
+
+**门控完整性教训（2026-09-25 实测）**：本次实施中，有两处是"测试全绿但功能坏"的漏网 ——
+#4 的导航树、#6 的账号设置入口。**判据不能只看测试通过**，必须以"运行时能否触达/点击后行为是否合理"为准。
+真机验证（§5）需**穷举点击**账号相关的每一处入口，而非抽查。
 
 **保留不动**（它们是 API Key 能力的一部分）：
 - 顶栏 `LoginButton` / `CurrentUserButton`（反映 key 是否已配置）
@@ -146,7 +152,7 @@ Run 按钮显示 `Sign in to run`，点击弹 `ApiNodesSignInContent`（文案
 |---|---|---|
 | 1 | `useBrowserTabTitle.ts:12-13` | 兜底 `'ComfyUI'` → `'梦幻之流'`；后缀 `' - ComfyUI'` → `' - 梦幻之流'` |
 | 2 | `UserSelectView.vue:7` | `<h1>ComfyUI</h1>` → `<h1>梦幻之流</h1>` |
-| 3 | 设置面板（取代 User 面板注册位，见 §3.1 #4） | 「关于」项：「基于 ComfyUI 构建 · GPL-3.0」+ 后端版本号 |
+| 3 | `setting/AboutPanel.vue`（本就注册在 `panels` 首位，**无需新建**） | 加一条「基于 ComfyUI 构建 · GPL-3.0」声明（i18n key `g.builtOnComfyUI`；fork 的 ESLint 禁止模板裸文本） |
 
 #3 的理由：README 已声明衍生关系（`README.md:105,109-110`），但**设备上看不到 README**。
 GPL-3.0 衍生作品分发时应有可达的版权声明。
@@ -200,7 +206,7 @@ API Key、节点、主动触发的请求均不受影响。
 |---|---|---|
 | `canAccessSubscriptionFeatures` 局部覆盖 | 只改 `CurrentUserPopoverLegacy.vue` 内引用，不改定义处 | 实施时确认该文件内无其它依赖此值的逻辑分支 |
 | 门控点遗漏 | 账号登录可能有未发现的触发路径 | 验证 #4 以「运行时不可达」为准（截图 + 点击穷举），不以"改了代码"为准 |
-| 前端 pin/锚同步 | dist 变化 ⇒ `config/externals.pins.tsv` 锚必须同升（fork 纪律：`fetch_externals` 会 checkout 回旧 pin，静默吞掉改动） | 按既有 pin 流程同步 |
+| 前端 pin/锚同步 | dist 变化 ⇒ **两处锚必须同升**：① `config/externals.pins.tsv` 的 commit 与 md5；② `scripts/make_comfyui_stage.py:25` 的 `FE_INDEX_MD5` —— 后者在 `:147` 有**强制断言**，漏改会让 `make stage` / `make hap` 直接 FATAL。另有一个陷阱：fork 常处于 **detached HEAD**（`fetch_externals` 按 pin 做 `checkout <commit>`），改动前须先 `git checkout ohos`，否则提交会丢失 | 已按上述两处同步（2026-09-25 实施验证） |
 | 上游升级冲突 | 门控改动落在官方文件上 | 每处改动加注释说明意图，降低下次升级的误删风险 |
 
 ## 7. 文档同步
