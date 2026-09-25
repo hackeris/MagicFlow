@@ -86,7 +86,12 @@ deploy_environment`）。默认开启（`coreSettings.ts:479-484`）⇒ localhos
 真机验证（§5）需**穷举点击**账号相关的每一处入口，而非抽查。
 
 **保留不动**（它们是 API Key 能力的一部分）：
-- 顶栏 `LoginButton` / `CurrentUserButton`（反映 key 是否已配置）
+- 顶栏 `CurrentUserButton`（**已配 key 时**显示登录态；且是 Logout 的唯一入口）
+  ⚠ **2026-09-25 增补**：其兄弟 `LoginButton`（**未配 key 时**的人形图标）已按用户决策
+  **门控关停**（`showLoginButton = false`，`TopMenuSection.vue` / `WorkflowTabs.vue` 两处）——
+  配置入口统一到「设置 → 其他 → API 密钥」，顶栏不再有第二个入口。
+  **用的是门控不是删除**：组件与引用保留（`knip` 需要引用，且便于上游合并），翻开关即还原。
+  验证：`dumpLayout` 的 UI 树中无 `login`/`sign in` 节点（对照「设置」按钮仍在）。
 - `CurrentUserPopover` 的 Logout（`CurrentUserPopoverLegacy.vue:145`）—— 清除 key 的唯一入口
 - `ApiKeyForm.vue` 主体
 - `main.ts:74` Firebase 初始化（`initializeApp` 不发网络请求）
