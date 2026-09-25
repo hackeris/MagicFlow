@@ -52,8 +52,24 @@ git -C /data/share/comfyui/thirdparty/comfyui-frontend log --oneline -1
 ```
 
 预期：主仓库在 `master`，工作区只有 `thirdparty/safetensors`、`thirdparty/tokenizers` 两个未跟踪目录；
-fork 在 `ohos` 分支，HEAD 为 `bef1b1d`（或其后继），工作区干净。
+fork 工作区干净，HEAD 为 `bef1b1d`。
 **若 fork 工作区不干净 → 停下，先问清楚那些改动是什么。**
+
+- [ ] **Step 1b: 确保 fork 在 `ohos` 分支上（不是 detached HEAD）**
+
+```bash
+git -C /data/share/comfyui/thirdparty/comfyui-frontend branch --show-current
+```
+
+**若输出为空**（`git status` 显示 `## HEAD (no branch)`）—— 这是常态：`fetch_externals`
+按 pin 执行 `checkout <commit>`，会把 fork 留在 detached HEAD 上，**此时提交会丢失**。切回分支：
+
+```bash
+git -C /data/share/comfyui/thirdparty/comfyui-frontend checkout ohos
+git -C /data/share/comfyui/thirdparty/comfyui-frontend status -sb | head -2
+```
+
+预期：`## ohos`。`ohos` 与 pin 指向同一 commit，切换不改变工作区内容。
 
 - [ ] **Step 2: 记录当前 dist 与锚（改动后的对比基准）**
 
@@ -633,33 +649,68 @@ NEW_COMMIT=$(git -C /data/share/comfyui/thirdparty/comfyui-frontend rev-parse HE
 echo "fork 新 commit = $NEW_COMMIT"
 ```
 
-- [ ] **Step 2: 用上一步的 commit 与 Task 8 的 md5 更新 pins**
+- [ ] **Step 2: 更新两处锚（缺一即链断）**
 
-先定位（**两行不相邻，不要按行号猜**）：
+⚠ **md5 锚有两处，必须同值**：`config/externals.pins.tsv` 与 `scripts/make_comfyui_stage.py`
+的 `FE_INDEX_MD5`。后者在 `:147-148` 有**强制断言**，不符会让 `make stage` / `make hap`
+直接 FATAL。两行文件都不相邻，**用 grep 定位，不要按行号猜**。
 
 ```bash
 grep -n "comfyui-frontend-src\|comfyui-frontend-index.html" /data/share/comfyui/config/externals.pins.tsv | cut -c1-140
+grep -n "FE_INDEX_MD5" /data/share/comfyui/scripts/make_comfyui_stage.py
 ```
 
 预期旧值：
 - `comfyui-frontend-src` 行：commit = `bef1b1d1b2a8bbf100a51f20c7028bb334d000fe`
-- `comfyui-frontend-index.html` 行：md5 = `641e0fec1e0c4f77676c1aead7fb210e`，描述含 `源码 v1.54.4+ohos bef1b1d`
+- `comfyui-frontend-index.html` 行：md5 = `641e0fec1e0c4f77676c1aead7fb210e`
+- `make_comfyui_stage.py:25`：`FE_INDEX_MD5 = "641e0fec1e0c4f77676c1aead7fb210e"`，注释含 `ohos bef1b1d`
 
-用 Edit 工具改三处：
-1. `bef1b1d1b2a8bbf100a51f20c7028bb334d000fe` → `$NEW_COMMIT`（整串，出现在 src 行的第 4 列）
-2. `641e0fec1e0c4f77676c1aead7fb210e` → Task 8 Step 2 记录的新 md5
-3. index.html 行描述里的 `bef1b1d` → 新 commit 前 7 位
+用 Edit 工具改五处：
+1. `pins.tsv` 的 commit：`bef1b1d1b2a8bbf100a51f20c7028bb334d000fe` → `$NEW_COMMIT`
+2. `pins.tsv` 的 md5：`641e0fec1e0c4f77676c1aead7fb210e` → 新 md5（Task 8 Step 2 记录）
+3. `pins.tsv` index.html 行描述里的 `bef1b1d` → 新 commit 前 7 位
+4. `make_comfyui_stage.py` 的 `FE_INDEX_MD5` 值 → 新 md5（与 2 同值）
+5. `make_comfyui_stage.py` 注释里的 `ohos bef1b1d` → `ohos <新 commit 前 7 位>`
 
-- [ ] **Step 3: 验证 pin 与产物一致**
+- [ ] **Step 2b: 同步 `python312.zip` 的锚（**前端 dist 一变就必然轮转**）**
+
+`entry/src/main/resources/rawfile/python312.zip` 内嵌 `comfyui/frontend_static/*`（约 1000 条），
+它的锚是 `sorted_namelist_sha256`，**前端 dist 的任何变化都会让它轮转**
+（本次实测：`f4041590…` → `0792b869…`，size `213665992` → `213667907`）。
+
+修复二选一：
+```bash
+python3 scripts/make_py312_zip.py --bless   # 官方机制: 实测值自动写回 pins.tsv 第 4/5 列
+```
+或手工把 `make hap` 失败输出里 `[MANIFEST] … sorted_namelist_sha256=<新值> … zip_size=<新值>`
+填进 `config/externals.pins.tsv` 的 `python312.zip` 行。
+
+**漏了会怎样**：`make hap` 的 `zip` 目标以 `Error 2` 失败（脚本主动 `exit 2`，并打印
+`[FAIL] pins.tsv 锚未更新` 与修复指引）。
+
+⚠ **同时注意**：`docs/manifests/python312.zip.manifest.gz` 会被脚本自动重写，需一并提交。
+
+⚠ **本次踩过的坑**：`make hap 2>&1 | tail -40` 会让**外层退出码变成 `tail` 的 0**，
+掩盖 make 的真实失败。务必用 `make hap > log 2>&1; rc=$?; tail log` 或 `set -o pipefail`。
+
+⚠ **改 `pins.tsv` 这类制表符分隔文件时**：Edit 的 `new_string` 必须包含**完整的分隔符结构**。
+本次 size 那处改动就因为 `new_string` 少写一个 tab，把第 5、6 列粘成了
+`213667907锚=sorted-namelist…`，脚本读到 `row[4]` 是个带描述的巨串 ⇒ **继续 FAIL，
+且报错信息把它显示成 `size=213667907锚=…` 才露馅**。
+**自检手法**：`awk -F'\t' '{print NF}'` 对每行都应为 6 列。
+
+- [ ] **Step 3: 验证三方一致**
 
 ```bash
 cd /data/share/comfyui && \
-  PIN_MD5=$(grep "comfyui-frontend-index.html" config/externals.pins.tsv | cut -f4) && \
-  REAL_MD5=$(md5sum thirdparty/comfyui-frontend/dist/index.html | cut -d' ' -f1) && \
-  [ "$PIN_MD5" = "$REAL_MD5" ] && echo "[OK] md5 锚一致: $PIN_MD5" || echo "[FAIL] 锚不一致: pin=$PIN_MD5 real=$REAL_MD5"
+  REAL=$(md5sum thirdparty/comfyui-frontend/dist/index.html | cut -d' ' -f1) && \
+  PIN=$(grep "comfyui-frontend-index.html" config/externals.pins.tsv | cut -f4) && \
+  STAGE=$(grep -oP 'FE_INDEX_MD5 = "\K[0-9a-f]+' scripts/make_comfyui_stage.py) && \
+  echo "real=$REAL pin=$PIN stage=$STAGE" && \
+  { [ "$REAL" = "$PIN" ] && [ "$REAL" = "$STAGE" ] && echo "[OK] 三方一致"; } || echo "[FAIL] 锚不一致"
 ```
 
-预期：`[OK] md5 锚一致`。
+预期：`[OK] 三方一致`。
 
 - [ ] **Step 4: 提交主仓库的 pin 与脚本改动**
 
@@ -710,12 +761,19 @@ hdc -t 192.168.1.5:44959 file recv /data/local/tmp/s1.jpeg /tmp/s1.jpeg
 在设备上点「启动 梦幻之流」，待后端就绪后：侧栏菜单 → Settings → About。
 截图确认：面板中有「基于 ComfyUI 构建 · GPL-3.0」，且设置列表**无 User / Credits 项**。
 
-- [ ] **Step 3: 验证登录对话框只剩 API Key 表单**
+- [ ] **Step 3: 穷举点击账号相关入口（**不要抽查**）**
 
-点顶栏用户图标。截图确认：
-- 显示 `API Key` 标题 + 输入框 + `Use your Comfy API key to enable API Nodes` 说明
-- **无** Google/GitHub 按钮、无邮箱密码表单、无「注册」链接、无 back 按钮
-- 顶部**无** ComfyOrg logo
+spec §3.1 的「门控完整性教训」记录了本次两处**测试全绿但功能坏**的漏网（设置导航树、
+账号设置入口）。故本步**逐一点击每个可能入口**，每点一次记录落点：
+
+| 入口 | 期望 |
+|---|---|
+| 顶栏用户图标 | 只有 `API Key` 表单：无 Google/GitHub 按钮、无邮箱密码、无「注册」链接、无 back 按钮、顶部无 ComfyOrg logo |
+| 设置对话框左侧导航 | 只有 `General` 一个分组；**无** User / Workspace / Plan & Credits / Members |
+| 设置 → 搜索 `user` / `credits` / `plan` | 命中为空 |
+| 用户菜单（已配 key 后展开） | **无** "Account settings"、无 "Add Credits"、无 "Partner Nodes Credits"；**保留** Logout（清除 key 的唯一入口） |
+| Help 菜单 | **无** "Update ComfyUI"；文档 / GitHub / Discord 等外链**保留** |
+| 工作流含官方 API 节点且未配 key 时的 Run 按钮 | 仍为 "Sign in to run"（**这是保留项**，点击能打开 API Key 表单；文案不匹配是已知且接受的，见 §3.2.1） |
 
 - [ ] **Step 4: 验证 API Key 链路（需用户提供真实 key）**
 

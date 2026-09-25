@@ -206,7 +206,7 @@ API Key、节点、主动触发的请求均不受影响。
 |---|---|---|
 | `canAccessSubscriptionFeatures` 局部覆盖 | 只改 `CurrentUserPopoverLegacy.vue` 内引用，不改定义处 | 实施时确认该文件内无其它依赖此值的逻辑分支 |
 | 门控点遗漏 | 账号登录可能有未发现的触发路径 | 验证 #4 以「运行时不可达」为准（截图 + 点击穷举），不以"改了代码"为准 |
-| 前端 pin/锚同步 | dist 变化 ⇒ **两处锚必须同升**：① `config/externals.pins.tsv` 的 commit 与 md5；② `scripts/make_comfyui_stage.py:25` 的 `FE_INDEX_MD5` —— 后者在 `:147` 有**强制断言**，漏改会让 `make stage` / `make hap` 直接 FATAL。另有一个陷阱：fork 常处于 **detached HEAD**（`fetch_externals` 按 pin 做 `checkout <commit>`），改动前须先 `git checkout ohos`，否则提交会丢失 | 已按上述两处同步（2026-09-25 实施验证） |
+| 前端 pin/锚同步 | dist 变化 ⇒ **三处锚必须同升**：① `config/externals.pins.tsv` 的 `comfyui-frontend-src` commit 与 `comfyui-frontend-index.html` md5；② `scripts/make_comfyui_stage.py:25` 的 `FE_INDEX_MD5`（同 md5 值，`:147` 有强制断言）；③ `config/externals.pins.tsv` 的 `python312.zip` 锚 —— **该 zip 内嵌 `comfyui/frontend_static/*` 约 1000 条，前端 dist 一变其 sorted-namelist 锚必轮转**（漏改则 `make hap` 的 zip 目标 `exit 2`；可用 `python3 scripts/make_py312_zip.py --bless` 自动回写）。另两个坑：fork 常处于 **detached HEAD**（`fetch_externals` 按 pin `checkout <commit>`，**`make hap` 的依赖链也会触发**），改动前须先 `git checkout ohos`；且**勿用 `\| tail` 掩盖 make 退出码**（会使外层 rc=0 而 make 实际失败） | 2026-09-25 实施中逐处踩到并验证（③ 与 tail 坑均为实施时新发现） |
 | 上游升级冲突 | 门控改动落在官方文件上 | 每处改动加注释说明意图，降低下次升级的误删风险 |
 
 ## 7. 文档同步

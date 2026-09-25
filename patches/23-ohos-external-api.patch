@@ -20,11 +20,11 @@ index 0000000..725a4d6
 +__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 diff --git a/custom_nodes/ohos_external_api/api_client.py b/custom_nodes/ohos_external_api/api_client.py
 new file mode 100644
-index 0000000..cf6eeff
+index 00000000..89ba3034
 --- /dev/null
 +++ b/custom_nodes/ohos_external_api/api_client.py
 @@ -0,0 +1,156 @@
-+# OHOS_EXTERNAL_API v1 — 自研第三方 API 节点组的 HTTP 客户端
++# OHOS_EXTERNAL_API v2 — 自研第三方 API 节点组的 HTTP 客户端
 +# (设计: docs/external-api-node-design.md; 密钥方案见该文 §1.5)
 +"""纯 requests 实现, 零新依赖(requests/PIL/numpy/torch 均在设备栈内)。
 +
@@ -182,11 +182,11 @@ index 0000000..cf6eeff
 +    return torch.from_numpy(arr)[None, ...]
 diff --git a/custom_nodes/ohos_external_api/nodes.py b/custom_nodes/ohos_external_api/nodes.py
 new file mode 100644
-index 0000000..13ca8b0
+index 00000000..e64678a5
 --- /dev/null
 +++ b/custom_nodes/ohos_external_api/nodes.py
 @@ -0,0 +1,215 @@
-+# OHOS_EXTERNAL_API v1 — 自研通用第三方 API 节点组(W4; 设计 docs/external-api-node-design.md)
++# OHOS_EXTERNAL_API v2 — 自研通用第三方 API 节点组(W4; 设计 docs/external-api-node-design.md)
 +"""三个节点: OHOS_API_Text / OHOS_API_Image / OHOS_API_HTTP。纯 Python, 零新依赖。
 +
 +输出标准 ComfyUI 类型(TEXT=STRING / IMAGE=torch 张量), 可直接接 PreviewImage / SaveImage
@@ -240,7 +240,7 @@ index 0000000..13ca8b0
 +        key = resolve_api_key(provider)
 +        if not key:
 +            raise ApiError(
-+                f"服务商「{provider}」尚未配置密钥 —— 请在 设置 → 云 API 密钥 里填写")
++                f"服务商「{provider}」尚未配置密钥 —— 请在 设置 → 其他 → API 密钥 里填写")
 +        values["api_key"] = key
 +        values["auth_header"] = f"Bearer {key}"
 +    else:
@@ -403,21 +403,31 @@ index 0000000..13ca8b0
 +}
 diff --git a/custom_nodes/ohos_external_api/web/api_keys.js b/custom_nodes/ohos_external_api/web/api_keys.js
 new file mode 100644
-index 0000000..5138bd2
+index 00000000..612998f0
 --- /dev/null
 +++ b/custom_nodes/ohos_external_api/web/api_keys.js
-@@ -0,0 +1,136 @@
-+// OHOS_EXTERNAL_API v1 — 云 API 密钥设置项 + 本地/云双模路由提示
+@@ -0,0 +1,222 @@
++// OHOS_EXTERNAL_API v2 — API 密钥设置项 + 本地/云双模路由提示
 +// 设计: docs/external-api-node-design.md §1.5
 +//
 +// 密钥为什么用「自定义渲染器」而不是普通 text 设置项:
 +//   普通设置项的值会落进 comfy.settings.json(明文); 自定义渲染器不调 setter,
 +//   值只经 /api/ohos/apikeys 写进 <comfyui根>/api_keys.json(0600),
 +//   且界面只回显掩码 —— 两处都不留明文。
++//
++// 入口位置: category 显式写成 ['API 密钥', <分组名>]。不写会按 id 首段派生出
++//   'MagicFlow'(官方兜底 setting.category || setting.id.split('.')) —— 对用户无意义。
++//   非官方内置分类(Comfy/LiteGraph/Appearance/3D/Mask Editor/Other)一律被收进导航树
++//   的「其他」组(官方 zh 译名, settingsCategories.Other) ⇒ 实际路径 = 设置 → 其他 → API 密钥。
++//   该路径与 nodes.py 的「尚未配置密钥」报错文案同源, 改一处须同步另一处。
++//   分组名与设置项名分开是官方渲染机制决定的: 树里每个叶子自成一组(SettingDialog
++//   的 sortedGroups), 同路径的多个设置项会互相覆盖(buildTree 的 data 覆盖写)。
 +import { app } from "../../scripts/app.js";
 +import { api } from "../../scripts/api.js";
 +
 +const API_PATH = "/ohos/apikeys"; // api.fetchApi 自动补 /api 前缀
++const CATEGORY = ["API 密钥"];
++const COMFY_KEY_STORAGE = "comfy_api_key"; // 官方 apiKeyAuthStore 的存储键
 +
 +const PROVIDERS = {
 +  siliconflow: { label: "硅基流动", url: "https://cloud.siliconflow.cn/account/ak" },
@@ -480,13 +490,75 @@ index 0000000..5138bd2
 +        input.placeholder = d.masked || "已配置";
 +        status.textContent = "已保存";
 +      } catch (e) {
-+        status.textContent = `失败: ${e.message}`;
++        status.textContent = `失败：${e.message}`;
 +      } finally {
 +        save.disabled = false;
 +      }
 +    };
 +
 +    row.append(input, save, status);
++    refresh();
++    return row;
++  };
++}
++
++// ── Comfy 官方密钥: 复用官方对话框, 不自建输入框 ─────────────────────────────
++// 官方对话框与顶栏用户图标是同一个 store(apiKeyAuthStore), 两边状态自动同步,
++// 且复用官方的 createCustomer() 校验 —— 自建输入框会绕过校验, 也写不进该 store
++// (前端只在提交 prompt 时把这个 store 的值注入 extra_data)。
++// app.extensionManager.dialog/command 是官方公开给扩展的 API(types/extensionTypes.ts);
++// 运行时若缺席则降级提示走顶栏, 不静默失败。
++async function openComfyKeyDialog() {
++  const em = app.extensionManager;
++  try {
++    if (em?.dialog?.showSignInDialog) {
++      await em.dialog.showSignInDialog();
++      return true;
++    }
++    if (em?.command?.execute) {
++      em.command.execute("Comfy.User.OpenSignInDialog");
++      return true;
++    }
++  } catch (e) {
++    console.warn("[ohos.external_api] 打开官方 API Key 对话框失败:", e);
++  }
++  return false;
++}
++
++function comfyKeyRenderer() {
++  return () => {
++    const row = document.createElement("div");
++    row.style.cssText = "display:flex;gap:8px;align-items:center;width:100%";
++
++    const status = document.createElement("span");
++    status.style.cssText = "font-size:12px;opacity:.8;white-space:nowrap";
++
++    const btn = document.createElement("button");
++    btn.textContent = "配置密钥";
++    btn.style.cssText = BUTTON_CSS;
++
++    // 只判有无、不读明文 —— 状态与顶栏用户图标同源(同一个 localStorage 键)
++    const refresh = () => {
++      status.textContent = localStorage.getItem(COMFY_KEY_STORAGE)
++        ? "已配置"
++        : "未配置";
++    };
++
++    btn.onclick = async () => {
++      btn.disabled = true;
++      try {
++        if (!(await openComfyKeyDialog())) {
++          status.textContent = "请在顶栏右上角配置";
++          return;
++        }
++      } finally {
++        btn.disabled = false;
++      }
++      // 对话框内保存后 store 异步校验, 稍后再同步一次状态
++      setTimeout(refresh, 800);
++    };
++
++    row.append(btn, status);
 +    refresh();
 +    return row;
 +  };
@@ -522,22 +594,36 @@ index 0000000..5138bd2
 +    return;
 +  }
 +  alert(
-+    "本机跑不动这个工作流:\n\n" +
++    "本机无法运行此工作流：\n\n" +
 +      reasons.map((r) => `· ${r}`).join("\n") +
-+      "\n\n可以用「云 API 生图」节点把这一步交给云端 API 执行。",
++      "\n\n可用「云 API 生图」节点把这一步交给云端 API 执行。",
 +  );
 +}
 +
 +app.registerExtension({
 +  name: "ohos.external_api",
 +
-+  settings: Object.entries(PROVIDERS).map(([id, meta]) => ({
-+    id: `MagicFlow.ApiKey.${id}`,
-+    name: `${meta.label} API 密钥`,
-+    type: keyRenderer(id),
-+    defaultValue: "",
-+    tooltip: `密钥只存本机、不随工作流传出。获取地址: ${meta.url}`,
-+  })),
++  settings: [
++    {
++      id: "MagicFlow.ApiKey.comfy_org",
++      category: [...CATEGORY, "Comfy 官方 API"],
++      name: "API 密钥",
++      type: comfyKeyRenderer(),
++      defaultValue: "",
++      tooltip:
++        "官方 API 节点（OpenAI、Gemini、Kling 等）使用的 comfy.org 账号密钥。",
++    },
++    ...Object.entries(PROVIDERS).map(([id, meta]) => ({
++      id: `MagicFlow.ApiKey.${id}`,
++      category: [...CATEGORY, meta.label],
++      name: "API 密钥",
++      type: keyRenderer(id),
++      defaultValue: "",
++      tooltip:
++        `云 API 节点选用「${meta.label}」时使用。` +
++        `密钥可在 ${meta.url} 获取。`,
++    })),
++  ],
 +
 +  getCanvasMenuOptions() {
 +    return [{ content: "检查本机能否运行此工作流", callback: checkLocalFeasibility }];

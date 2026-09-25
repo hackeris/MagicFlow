@@ -4,8 +4,15 @@
 > 官方品牌、Comfy 云登录入口、comfy.org 外链、官方遥测等"与官方绑定"的展示面,
 > 可能让用户误以为这是官方出品/官方账号可用。本文为**排查清单**,每项含:位置、
 > 什么时候会展示给用户、建议处置。
-> **处理状态(2026-09-12 核查)**:A2(桌面 label)已随品牌更名完成;其余各项经 fork 源码
-> 核实**仍未处理**(A1/A3/A4/B/C/D/E/F)—— 其中 **D1 遥测是隐私底线,建议优先**。
+> **处理状态(2026-09-25 复核 —— 结论有重要修正)**:本清单写于 2026-09-08、09-12 核查过,
+> 09-25 逐项复核后**推翻了其中若干结论**,并**修正了处置方向**:
+> - **D1 / D2 / E1 三项已消解**(非"未处理")—— 都被构建期门控挡住了, 各项证据见对应行;
+> - **B 类严重度被低估**:原写"需产品决定",实为顶栏登录按钮**无任何门控**、点击即开官方登录框;
+> - **补录一项漏记**:release notes 启动自动外发(见 D3);
+> - **处置方向修正**:账号登录面按「**门控切断触达、不删代码**」处理(2026-09-25 交付);
+>   而 **API Key 能力与官方 API 节点是有意保留的**, 不是待清理项 —— 见文末「保留决策」。
+>
+> 设计与实测: `docs/superpowers/specs/2026-09-24-branding-cleanup-design.md`。
 > 清单前提:前端构建非 isCloud(web 构建),云计费/订阅等大多已门控隐藏;以下均为
 > 实测可以在我们的构建里出现的面。
 
@@ -41,6 +48,19 @@
 |---|---|---|---|
 | D1 | `src/bootstrap.ts:2-4` **无条件 `initDatadogRum()`** + `initDatadogRum.ts:16-24` 仅当 `X-Frontend-Version == __COMFYUI_FRONTEND_COMMIT__` 才正式上报 | 我们的自建 dist 若保留了与 comfyui-frontend 发布相同的 commit 标识,设备上运行时**会向 Datadog 上报 RUM 数据**(请求会发出,目标域名不可达时静默失败)——既涉隐私又关联官方 | **必改**:直接删除 boot 调用或把 initDatadogRum 门控改为显式 false |
 | D2 | Mixpanel/PostHog 等 providers(platform/telemetry/providers/cloud/*) | 同类官方云遥测 | 确认随 D1 一并废除 |
+| D3 | `GraphCanvas.vue:594` → `releaseStore.initialize()` | **审计漏记项**:启动后自动发 `GET {api}/release-notes/…`,参数含 `current_version/form_factor/locale/deploy_environment` | **已关闭**(2026-09-25):`Comfy.Notification.ShowVersionUpdates` 默认值改 false |
+
+**D 类 2026-09-25 复核结论(附产物级证据)**:
+
+- **D1 已消解** —— `src/bootstrap.ts` 的 `initDatadogRum()` 调用被
+  `if (__DISTRIBUTION__ === 'cloud')` 包裹, 而我们是 localhost 构建 ⇒ **编译期死分支**。
+  产物验证: `dist/assets/*.js` 中搜不到 `prod-v2` / `resolveDeployEnv` / Datadog clientToken
+  ⇒ 代码根本没进包。此外 `initDatadogRum.ts:64-83` 还有 hostname 白名单兜底(非
+  comfy.org 域名直接 no-op)。**原"必改"建议不成立**。
+- **D2 已消解** —— `platform/telemetry/providers/cloud/` 下 9 个 provider 全都只在
+  `initTelemetry.ts` 内被动态 import, 而该函数首行即 `if (!IS_CLOUD_BUILD) return`
+  (`:9,19`); 调用点 `main.ts:52-54` 同样被 `isCloud` 包裹。
+  **没有任何一个是无条件执行的**。
 
 ## E. 官方云功能 UI(多为 isCloud 门控,确认即可)
 
@@ -63,3 +83,34 @@
 
 > 处理方式:全部在前端 fork(thirdparty/comfyui-frontend)改源码 + 重新构建 dist,
 > 与既有前端构建链一致;改动记录证据串/注释,避免下次 fetch_externals 覆盖。
+
+---
+
+## 保留决策:API Key 能力与官方 API 节点是有意保留的(2026-09-25)
+
+**后来的维护者请注意:以下不是遗漏,是明确的产品决策 —— 不要"顺手清理"掉。**
+
+本清单的原始前提是「把官方品牌/云入口当成需要清理的负担」。2026-09-25 复核后修正为:
+**账号登录面门控、API Key 能力保留**。理由是二者在代码层面本就分开:
+
+| | 账号登录 | API Key |
+|---|---|---|
+| 依赖 | Firebase(Google 服务)+ OAuth 弹窗 | 仅一个 `X-API-KEY` 头 |
+| 存储 | Firebase session | `localStorage['comfy_api_key']`(`apiKeyAuthStore.ts:15`) |
+| 判定 | `firebaseUser !== null` | `isApiKeyLogin = apiKeyStore.isAuthenticated && firebaseUser.value === null`(`useCurrentUser.ts:18-19`) |
+| 相互关系 | — | **与 Firebase 互斥**,全程不碰 Google |
+
+**有意保留的内容**:
+- 官方 39 个 provider / **259 个 API 节点**(视频生成、3D、音频、LLM —— 本地设备跑不动的能力)
+- 节点认证路径 `IO.Hidden.api_key_comfy_org`:用户从 comfy.org 官网生成 key 后粘贴进来
+- `SignInContent.vue:101` 的 API Key 入口 —— 它本就在 `v-if="!isCloud"` 块内,
+  **是官方专门为非云构建留的路径**(`turnstile.ts` 注释亦印证:OSS/localhost 有
+  "server-side loopback exemption covers local signup")
+
+**门控掉的内容**(仅切断触达,代码全部保留在原地):
+登录对话框的 OAuth / 邮箱密码 / 注册分支、设置里的 User / Credits / PlanCredits 面板、
+用户菜单的订阅 / 充值区块、登录对话框的 ComfyOrg logo 标题。
+
+**维护要点**:上述门控依赖 `SignInContent.vue` 的 `showApiKeyForm` 初始值为 `true`。
+若上游升级后该值回到 `false`,账号登录面会**重新暴露**,需重新施加门控;
+反之若误将其改回,API Key 入口也会一并消失。

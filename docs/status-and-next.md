@@ -46,13 +46,20 @@ MatePad 11.5 S / 11.8GB RAM:**稳态规格 = 256×256 级**(fp16 模型)。
 | ④ | ~~CANN/AscendC 试点~~ | — | — | **已被 NNRt 路线取代** |
 | ⑤ | ~~NPU 后端(NNRt / PrivateUse1)~~ | — | — | **已终止**(设备不支持卷积,见下) |
 | ⑥ | **W4:远程生图 API 节点组** | **高(体验上限)** | 中(见设计文档) | **已交付(2026-09-12)** —— 真机 Q0–Q6 全绿(verify 12 项 ALL PASS + mock 轮 11 项 ALL GREEN) |
-| ⑦ | 品牌/遥测清理 | 中(发布合规底线) | 低-中 | 待做 —— `docs/comfyui-branding-audit.md`(遥测项优先) |
+| ⑦ | ~~品牌/遥测清理~~ | — | — | **已交付(2026-09-25)** —— 账号登录面门控(只切触达不删代码) + 品牌正名「梦幻之流」 + **保留 API Key 能力**(官方 259 个 API 节点); 审计清单复核后 D1/D2/E1 改判为已消解。设计与证据见 `docs/superpowers/specs/2026-09-24-branding-cleanup-design.md` |
 | ⑧ | 运行时基线优化(减小 2.3G 常驻) | 中(解锁 512 的唯一路径) | 高(动 torch/运行时) | 研究项,非紧急 |
 | ⑨ | workspace 规格选择 UI | 低(512 已放弃,只剩 256 提示) | 低 | 待重新定义范围 |
 
 **W4 说明**(端云策略 §4):自研 `OHOS_API_Text/Image/HTTP` 三节点,让工作流直接调第三方生图
 API,输出标准 IMAGE 张量可接原生下游;零新依赖(custom_nodes 目录机制,与 patch 15 同构)。
 设计见 `docs/external-api-node-design.md`(patch 编号已修正为 23 / fetch 段 ③i)。
+
+**2026-09-25 入口统一**(真机验证通过): 两个服务商密钥项原由 id 首段派生成无意义的
+`MagicFlow` 分组、且 Comfy 官方密钥另在顶栏 ⇒ 收敛为 `设置 → 其他 → API 密钥` 一处
+(三组: Comfy 官方 API / 硅基流动 / 阿里百炼); Comfy 项改为按钮调起官方对话框(与顶栏
+用户图标同一 store,状态自动同步,复用官方 `createCustomer()` 校验)。节点报错文案同步为
+「其他」(官方 zh 译名,原写「其它」会指错路)。patch 23 证据串升 `v2` —— `fetch_externals.sh`
+③i 段改为落后即先删目录再重刷。详见设计文档 §1.5「入口统一」。
 **2026-09-12 实施**:`patches/23-ohos-external-api.patch`(4 个节点文件 + server.py 密钥端点
 hunk, fetch 段 ③i 幂等 apply) + 后端 `GET/POST /ohos/apikeys`(GET 只回掩码,绝不下发明文;
 存储 `<comfyui根>/api_keys.json` 0600) + 前端扩展 `web/api_keys.js`(经 custom node 的

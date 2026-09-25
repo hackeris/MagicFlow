@@ -118,6 +118,37 @@ custom node 导出 `WEB_DIRECTORY` 后,其 JS 会被前端**自动加载**:`node
 ⇒ **不需要改前端 fork、不需要重建 dist、不需要升 pin 双锚** —— 本设计 §0.1「不抄前端 web
 扩展」的原意是「节点声明无需前端扩展」(仍然成立),而**设置页 UI** 恰好可以用它零成本落地。
 
+### 入口统一(2026-09-25 实施)
+
+初版把两个服务商设置项直接注册进设置菜单,分类由 id 首段自动派生成无意义的 `MagicFlow`,
+且 Comfy 官方密钥另在顶栏 —— 用户视角是「两套体系、两个入口」。本次收敛为**一个入口**:
+
+| 项 | 形态 |
+|---|---|
+| 分类 | `category: ['API 密钥', <分组名>]` 显式指定 ⇒ 设备实显 `设置 → 其他 → API 密钥` |
+| 分组 | `Comfy 官方 API` / `硅基流动` / `阿里百炼`,每组一个设置项,项名统一「API 密钥」 |
+| Comfy 项 | **不自建输入框**: 按钮调 `app.extensionManager.dialog.showSignInDialog()` 拉起官方对话框,与顶栏用户图标同一个 store,状态自动同步 |
+
+**为什么分组名与项名分开**: 官方 `buildTree`(`utils/treeUtil.ts:14-38`)按 category 分段建树,
+同路径的多个设置项会**互相覆盖**(`parent.data = item`);而 `SettingDialog.vue` 的
+`sortedGroups` 把每个叶子节点当成一个分组标题 ⇒ 每个设置项**必须独占路径**,分组标题承担
+「哪家」的信息。
+
+**为什么 Comfy 项必须复用官方对话框**: 官方链路要求 key 在**前端**
+`localStorage['comfy_api_key']`(`apiKeyAuthStore.ts:15`)—— 前端用它验登录态,并在每次提交
+prompt 时注入 `extra_data.api_key_comfy_org`(`api.ts:1063-1064`,后端 `execution.py:220-223`
+只是被动接收)。自建输入框既绕过官方的 `createCustomer()` 校验,又写不进该 store。
+`app.extensionManager.dialog/command` 是官方公开给扩展的 API(`types/extensionTypes.ts:110-111`);
+运行时若缺席则降级提示「请在顶栏右上角配置」,不静默失败。
+
+**分类名以设备实显为准**: 官方 zh 译名是**「其他」**(`settingsCategories.Other`),节点侧
+「尚未配置密钥」的报错文案与之同源 —— 改一处须同步另一处。本次实测踩到:原写「其它」,
+用户照提示会找不到入口。
+
+**复现链影响**: patch 23 证据串随之升 `v2`。`fetch_externals.sh` ③i 段改为「落后即**先删目录
+再重刷**」—— 这 4 个文件在 patch 里是 new file 格式,已存在时 `git apply` 必冲突,删是重刷的前提。
+（升级理由:旧串在即 skip,会让改了 patch 的树静默停在旧内容。）
+
 ---
 
 ## 2. 加载与打包链(补丁复用 patch 15/16/17 模式)

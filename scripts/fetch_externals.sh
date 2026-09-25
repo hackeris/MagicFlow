@@ -140,7 +140,7 @@ ohos_patch_applied() { # $1=SRC 树
         && grep -q 'OHOS_DL_SDTURBO_SRC v1' "$1/server.py" 2>/dev/null \
         && grep -q 'OHOS_DL_CATALOG_EXPAND v1' "$1/server.py" 2>/dev/null \
         && grep -q 'OHOS_SmokeBench' "$1/custom_nodes/ohos_smoke/custom_node.py" 2>/dev/null \
-        && grep -q 'OHOS_EXTERNAL_API v1' "$1/custom_nodes/ohos_external_api/nodes.py" 2>/dev/null \
+        && grep -q 'OHOS_EXTERNAL_API v2' "$1/custom_nodes/ohos_external_api/nodes.py" 2>/dev/null \
         && grep -q 'ohos/apikeys' "$1/server.py" 2>/dev/null \
         && [ -f "$1/templates/index.json" ]
 }
@@ -248,23 +248,26 @@ fetch_comfyui_src() {
     fi
     # ③i 外部 API 节点组独立 patch(2026-09-12 W4, docs/external-api-node-design.md):
     #   三节点(Text/Image/HTTP) + server.py 密钥端点(只回掩码/0600) + web 扩展(密钥设置页).
-    #   幂等——证据串在即 skip; 半套(节点在但端点/扩展缺, 或反之)按 include 逐文件补齐。
-    if ! grep -q 'OHOS_EXTERNAL_API v1' "$SRC/custom_nodes/ohos_external_api/nodes.py" 2>/dev/null; then
-        ( cd "$SRC" && git apply "$ROOT/patches/23-ohos-external-api.patch" ) || \
-            die "③i patch 23(外部 API 节点)应用失败"
-        log "  [OK] 外部 API 节点(23) applied"
-    elif ! grep -q 'ohos/apikeys' "$SRC/server.py" 2>/dev/null || \
-         [ ! -f "$SRC/custom_nodes/ohos_external_api/web/api_keys.js" ]; then
+    #   幂等——证据串 v2 在即 skip; 落后(v1/缺)则**先删目录再重刷**: 这 4 个文件在 patch 里
+    #   是 new file 格式, 已存在时 git apply 必冲突, 删是重刷的前提(目录内零用户数据)。
+    #   server.py 端点**单独**判缺补齐 —— 它已在时不可重复 apply, 故不并入上面的循环。
+    #   v1→v2(2026-09-25): 密钥设置项统一入口 —— category 显式化 + 新增 Comfy 官方密钥项。
+    #   升版理由: 旧串在即 skip, 会让"改了 patch 的树"静默停在旧内容(本次实测踩到)。
+    if ! grep -q 'OHOS_EXTERNAL_API v2' "$SRC/custom_nodes/ohos_external_api/nodes.py" 2>/dev/null; then
+        rm -rf "$SRC/custom_nodes/ohos_external_api"
         for f in custom_nodes/ohos_external_api/__init__.py \
                  custom_nodes/ohos_external_api/api_client.py \
                  custom_nodes/ohos_external_api/nodes.py \
-                 custom_nodes/ohos_external_api/web/api_keys.js \
-                 server.py; do
-            ( cd "$SRC" && git apply --include="$f" "$ROOT/patches/23-ohos-external-api.patch" 2>/dev/null ) || true
+                 custom_nodes/ohos_external_api/web/api_keys.js; do
+            ( cd "$SRC" && git apply --include="$f" "$ROOT/patches/23-ohos-external-api.patch" ) || \
+                die "③i $f 应用失败"
         done
-        grep -q 'ohos/apikeys' "$SRC/server.py" 2>/dev/null || \
-            die "③i 外部 API 密钥端点补齐失败"
-        log "  [OK] 外部 API 节点(23) 增量补齐"
+        log "  [OK] 外部 API 节点(23) applied (v2)"
+    fi
+    if ! grep -q 'ohos/apikeys' "$SRC/server.py" 2>/dev/null; then
+        ( cd "$SRC" && git apply --include=server.py "$ROOT/patches/23-ohos-external-api.patch" ) || \
+            die "③i server.py 密钥端点应用失败"
+        log "  [OK] 外部 API 密钥端点 applied"
     fi
     stamp_set comfyui-src; log "  [OK] clone $(git -C "$SRC" rev-parse --short HEAD 2>/dev/null) + patch"
 }
