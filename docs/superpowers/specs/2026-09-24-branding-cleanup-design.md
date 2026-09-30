@@ -123,14 +123,20 @@ deploy_environment`）。默认开启（`coreSettings.ts:479-484`）⇒ localhos
 （功能性 —— 用户需要知道 key 从哪来）。改法：`showSignInDialog` 的 `headerComponent`
 不再指向 `ComfyOrgHeader`（组件保留原地不删）。
 
-### 3.2.1 partner gate 文案残留（决策：不处理）
+### 3.2.1 partner gate 文案残留（2026-09-25 当日改判：已处理）
 
 partner gate 链路仍可达（正确 —— 官方 API 节点保留）：工作流含 `api_node` 且未配 key 时，
 Run 按钮显示 `Sign in to run`，点击弹 `ApiNodesSignInContent`（文案
 `Sign in to run partner nodes`）。门控后已无 "sign in" 语义，实际动作是填 key。
 
-**决策（2026-09-25）**：不改。功能是通的（点 Sign In → 打开 API Key 表单）；改 i18n 会
+**原决策（2026-09-25 上午）**：不改。功能是通的（点 Sign In → 打开 API Key 表单）；改 i18n 会
 增加与上游的差异面，而该问题只在「含官方 API 节点 + 未配 key」时才撞见。
+
+**改判（2026-09-25）**：上面的成本判断在发现**官方给自定义节点留的 i18n 扩展点**后不再成立 ——
+走 `custom_nodes/*/locales/*/main.json` → `GET /api/i18n` → 前端 `mergeLocaleMessage` 深度合并，
+是**零 fork 改动**：不重建 dist、不动 pin 三锚、不与上游 locale 文件冲突（locale 是上游高频
+修改的文件，直接改值才是差异面）。5 条文案已覆盖为「配置 API 密钥」语义，2 条本就不含
+"sign in" 的保留原样。**改判理由、通道链路与验证证据见 `docs/external-api-node-design.md` §1.6**。
 
 ### 3.3 切生产配置
 
@@ -183,6 +189,28 @@ API Key、节点、主动触发的请求均不受影响。
 
 改用首页视觉语言（`Index.ets`）：深空渐变底 `#0A0E1E→#3B2A78` + 紫蓝渐变圆
 `#8B5CF6→#4F46E5` + 星光符号。PIL 生成（环境已有 12.2.0）。程序生成的简洁图标，非专业设计。
+
+**2026-09-26 修订**：初版的「星光」是 PIL 手画的四个装饰性四角星，且散落在圆**外** ——
+观感弱，与首页也对不上。改为与首页**同源的矢量符号**：`wand_and_stars`（魔杖+三星），
+直接取 SDK 符号字体 `HMSymbolVF.ttf` 的同一 glyph（PUA `U+0F0157`），也就是首页
+`SymbolGlyph($r('sys.symbol.wand_and_stars'))` 用的那一个轮廓。
+
+- 定位：按**墨迹**居中而非 em 框 —— glyph 墨迹在 em 内是偏的（包围盒 y −23~783 vs em 中心
+  500），直接用 `anchor='mm'` 会视觉偏下；
+- 查码点的方法与坑（**`sysResource.js` 的资源 ID 与字体码点是两套编号**，按前者低位反推会
+  得到别的符号）见 `scripts/gen_app_icons.py` 头注释「符号来源」节。
+
+**2026-09-26 二次修订（用户定版）**：去掉居中的渐变圆与深空底 —— 整个图标改为**紫色对角渐变
+满幅**（`#8B5CF6→#4F46E5`，与首页 logo 的 `linearGradient` 135° 同源），符号随之从「圆径 ×
+0.405」（占画布 24%）放大到「画布 × 0.50」（翻倍多）。
+
+这次同时修正一处**分层用法错误**：上一版把渐变圆与深色底都画在 `foreground` 层、`background`
+层放深空渐变 —— 但分层图标里 **background 才是放底色的层**（系统对它做圆角遮罩），foreground
+放内容（系统对它做视差：放大 + 位移）。现改为 background = 紫色渐变、foreground = 透明底 +
+白符号；副作用是符号不再被圆径二次约束，故能放大。`startIcon.png`（启动窗口）仍取两层合成。
+
+安全边距按「系统视差把前景放大 1.2× 仍不裁」校验（脚本内断言：墨迹宽偏离设计值 ±12% 失败、
+上边缘中点必须透明），并做了圆角遮罩 + 1.2× 放大的模拟对照图确认四角不裁。
 
 ## 4. 明确不做
 
