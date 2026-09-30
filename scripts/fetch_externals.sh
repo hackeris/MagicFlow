@@ -247,7 +247,8 @@ fetch_comfyui_src() {
         log "  [OK] smoke 节点(15) 增量补齐"
     fi
     # ③i 外部 API 节点组独立 patch(2026-09-12 W4, docs/external-api-node-design.md):
-    #   三节点(Text/Image/HTTP) + server.py 密钥端点(只回掩码/0600) + web 扩展(密钥设置页).
+    #   三节点(Text/Image/HTTP) + server.py 密钥端点(只回掩码/0600) + web 扩展(密钥设置页)
+    #   + locales 文案覆盖(2026-09-25, 见段末).
     #   幂等——证据串 v2 在即 skip; 落后(v1/缺)则**先删目录再重刷**: 这 4 个文件在 patch 里
     #   是 new file 格式, 已存在时 git apply 必冲突, 删是重刷的前提(目录内零用户数据)。
     #   server.py 端点**单独**判缺补齐 —— 它已在时不可重复 apply, 故不并入上面的循环。
@@ -263,6 +264,24 @@ fetch_comfyui_src() {
                 die "③i $f 应用失败"
         done
         log "  [OK] 外部 API 节点(23) applied (v2)"
+    fi
+    # locales 文案覆盖(2026-09-25): partner-gate 的「登录」语义随账号登录面门控失效
+    #   (实际动作 = 配置 comfy.org API 密钥, 见 docs/superpowers/specs/2026-09-24-branding-cleanup-design.md §3.2.1)。
+    #   走**官方扩展点**, 零前端改动: 前端 bootstrapStore 拉 GET /api/i18n
+    #   (app/custom_node_manager.py:140 扫 custom_nodes/*/locales/*/main.json)
+    #   → mergeCustomNodesI18n → i18n.global.mergeLocaleMessage(深度合并, 同 key 覆盖)
+    #   ⇒ 不重建 dist、不动 pin 三锚。
+    #   判据**贴内容**而非版本串 —— 只改文案时版本串不轮转, "串在即 skip" 会静默失明
+    #   (v1→v2 踩过同类); 落后则只删 locales 目录重刷(new file 格式, 存在即冲突)。
+    #   本段须在整目录重刷**之后**: 上一段的 rm -rf 会连 locales 一并删掉。
+    if ! grep -q '配置 API 密钥以运行' "$SRC/custom_nodes/ohos_external_api/locales/zh/main.json" 2>/dev/null; then
+        rm -rf "$SRC/custom_nodes/ohos_external_api/locales"
+        for f in custom_nodes/ohos_external_api/locales/en/main.json \
+                 custom_nodes/ohos_external_api/locales/zh/main.json; do
+            ( cd "$SRC" && git apply --include="$f" "$ROOT/patches/23-ohos-external-api.patch" ) || \
+                die "③i $f 应用失败"
+        done
+        log "  [OK] 外部 API 节点 locale 覆盖 applied"
     fi
     if ! grep -q 'ohos/apikeys' "$SRC/server.py" 2>/dev/null; then
         ( cd "$SRC" && git apply --include=server.py "$ROOT/patches/23-ohos-external-api.patch" ) || \

@@ -149,6 +149,65 @@ prompt 时注入 `extra_data.api_key_comfy_org`(`api.ts:1063-1064`,后端 `execu
 再重刷**」—— 这 4 个文件在 patch 里是 new file 格式,已存在时 `git apply` 必冲突,删是重刷的前提。
 （升级理由:旧串在即 skip,会让改了 patch 的树静默停在旧内容。）
 
+### 1.6 partner-gate 文案覆盖(2026-09-25)
+
+**问题**: 账号登录面门控(品牌清理 §3.1)后, `SignInContent` 只剩 `ApiKeyForm` 分支 ⇒
+「登录」这一动作在应用内已不存在, 实际动作是**配置 comfy.org API 密钥**。但 partner-gate
+链路仍可达且正确(官方 API 节点保留), 其 6 条文案仍说「登录/账户」:
+
+| i18n key | 门控前语义 | 门控后实际 |
+|---|---|---|
+| `actionbar.partnerRunGate.signInToRun` | Sign in to run / 登录以运行 | 打开密钥表单 |
+| `actionbar.partnerRunGate.signInCaption` | Partner nodes require an account | (tooltip) |
+| `apiNodesSignInDialog.title` | Sign in to run partner nodes | 同上 |
+| `apiNodesSignInDialog.signIn` | Sign In / 登录 | 打开密钥表单 |
+| `apiNodesSignInDialog.message` | …Please sign in to connect your account. | 同上 |
+| `apiNodesSignInDialog.tooltip` | …credits, the only paid part of Comfy. | **本就准确, 不改** |
+| `apiNodesSignInDialog.whatArePartnerNodes` | What are partner nodes? | **外链文档, 不改** |
+
+`message` 里「使用您账户中的积分」**是准确的** —— API 密钥关联的就是 comfy.org 账号,
+花的就是该账号的 credits; 错的只是「登录」这个动作词。
+
+**通道: 官方给自定义节点留的 i18n 扩展点**(零前端改动):
+
+```
+custom_nodes/<节点>/locales/<lang>/main.json
+  → CustomNodeManager.build_translations()      app/custom_node_manager.py:38
+      (扫 custom_nodes/*/locales/*/{main,nodeDefs,commands,settings}.json, 递归合并)
+  → GET /api/i18n                               app/custom_node_manager.py:140
+      (server.py:1683 已接线 add_routes; server.py:1698 自动加 /api 前缀)
+  → api.getCustomNodesI18n()                    frontend src/scripts/api.ts:1622
+  → mergeCustomNodesI18n()                      frontend src/i18n.ts:122
+  → i18n.global.mergeLocaleMessage(locale, msg) vue-i18n **深度合并 ⇒ 同 key 覆盖**
+```
+
+**为什么走它而不是改 fork 的 locale 文件**: 改 `comfyui-frontend/src/locales/{en,zh}/main.json`
+需重建 dist + 三锚同步 + zip 锚轮转(整条前端链); 且 locale 是上游**高频修改**的文件,
+每次升级都冲突。走 locales 目录则**零 fork 改动、零上游冲突**, 且可逆(删目录即还原)。
+
+**已知边界**: 只能覆盖**前端已存在的 key**(改值), 不能新增结构; 术语必须对齐官方译名 ——
+zh 侧用「API 密钥」(官方 `auth.apiKey.title`)、en 侧用 "API key"(官方 `auth.apiKey.description`),
+节点名沿用官方 zh 译名「合作伙伴节点」, 不造词。
+
+**复现链**: `fetch_externals.sh` ③i 段新增 locales 判据。判据**贴内容**
+(`grep '配置 API 密钥以运行'`)而非版本串 —— 只改文案时版本串不轮转, "串在即 skip" 会静默失明
+(v1→v2 踩过同类)。落后只删 `locales/` 目录重刷, 不碰既有 4 个文件。该段**须在整目录重刷之后**
+(前段的 `rm -rf` 会连 locales 一并删掉)。5 场景隔离测试(全新/落后/v2 缺 locales/locales 旧内容/幂等)全绿。
+
+**验证(2026-09-25 真机)**:
+
+1. **后端侧已闭环**: `GET /api/i18n` → `200 {zh:{…}, en:{…}}`, 10 条覆盖全部就位。
+   已固化为 `verify_smoke.sh` 判据 **W4b** —— 只判 key 存在、**不判文案值**(文案本就是要随需求
+   改的, 判值会让每次改文案都得改判据)。全量回归 **13 项 ALL PASS**(MM4x 0.653s / 出图 42.2s)。
+2. **合并结果已验证**: 用**真身** vue-i18n(取 fork 自己的 `node_modules`)+ 官方 locale 真身
+   (`src/locales/<loc>/main.json`)+ 设备真实 `/api/i18n` 返回, 复现 `mergeLocaleMessage` ——
+   10 条覆盖全部生效、2 条未覆盖项 tooltip/whatArePartnerNodes 保持官方原文, before→after
+   对照可查。**未复制任何逻辑**(项目已踩过"验证副本与真身漂移"的坑)。
+3. **UI 端到端未做**: 需造含 API 节点的工作流触发 partner gate 才能看到按钮文案; 验证时机上
+   设备正被另一会话全屏占用(跑 Wine/Windows 程序), 切前台会打断它。链路前两段已实测闭环,
+   前端调用路径另有代码证据(`main.ts:187` 无条件调用 → `bootstrapStore.ts:88` → `i18n.ts:122`,
+   且 `needsLogin` 需 `--multi-user` 才为真、我们不满足)。**待设备空闲时补做**。
+
 ---
 
 ## 2. 加载与打包链(补丁复用 patch 15/16/17 模式)

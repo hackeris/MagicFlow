@@ -180,6 +180,44 @@ index 00000000..89ba3034
 +        raise ApiError(f"base64 内容不是可解码的图像: {e}")
 +    arr = np.asarray(img).astype("float32") / 255.0
 +    return torch.from_numpy(arr)[None, ...]
+diff --git a/custom_nodes/ohos_external_api/locales/en/main.json b/custom_nodes/ohos_external_api/locales/en/main.json
+new file mode 100644
+index 00000000..b7b0372f
+--- /dev/null
++++ b/custom_nodes/ohos_external_api/locales/en/main.json
+@@ -0,0 +1,13 @@
++{
++  "actionbar": {
++    "partnerRunGate": {
++      "signInToRun": "Configure API key to run",
++      "signInCaption": "Partner nodes require a Comfy API key"
++    }
++  },
++  "apiNodesSignInDialog": {
++    "title": "Comfy API key required",
++    "signIn": "Configure API key",
++    "message": "Partner nodes run on third-party services and use credits from your account. Configure your API key to continue."
++  }
++}
+diff --git a/custom_nodes/ohos_external_api/locales/zh/main.json b/custom_nodes/ohos_external_api/locales/zh/main.json
+new file mode 100644
+index 00000000..abbbc35a
+--- /dev/null
++++ b/custom_nodes/ohos_external_api/locales/zh/main.json
+@@ -0,0 +1,13 @@
++{
++  "actionbar": {
++    "partnerRunGate": {
++      "signInToRun": "配置 API 密钥以运行",
++      "signInCaption": "合作伙伴节点需要 Comfy API 密钥"
++    }
++  },
++  "apiNodesSignInDialog": {
++    "title": "需要 Comfy API 密钥",
++    "signIn": "配置 API 密钥",
++    "message": "合作伙伴节点在第三方服务上运行，并使用您账户中的积分。请配置 API 密钥以继续。"
++  }
++}
 diff --git a/custom_nodes/ohos_external_api/nodes.py b/custom_nodes/ohos_external_api/nodes.py
 new file mode 100644
 index 00000000..e64678a5

@@ -13,7 +13,8 @@
 #   W3.  catalog/模型可见/模板路由(3 条)
 #   W4.  OHOS_API_* 三节点注册 + /extensions 可见 + 密钥端点往返 2 条(2026-09-12, patch 23);
 #        ⚠ 密钥段留一条 `__smoke__` 探针条目(端点无删除语义, 无害)
-#   合计 14 条 = 默认 12 条(2026-09-12 真机实测 12 项 ALL PASS) + MODEL_DL=1 时的 2 条。
+#   W4b. GET /api/i18n 含 locales 覆盖项(en+zh, 2026-09-25 patch 23 §1.6)
+#   合计 15 条 = 默认 13 条 + MODEL_DL=1 时的 2 条。
 # 用法: bash scripts/verify_smoke.sh [--fast] [--device 192.168.1.5:44959] [--port 8189] [--hap <path>]
 #   --fast   只验后端+判据 A/B(不跑出图); --device 默认 192.168.1.5:44959;
 #   --port   宿主侧 fport 端口(dev 8188 → 宿主 $PORT), 默认 8189。
@@ -297,6 +298,21 @@ try:
 except Exception as ex: print('BAD', ex)
 else: print('OK')
 " 2>/dev/null | grep -q OK && ok "W4 密钥回读(只回掩码, 响应零明文)" || bad "W4 密钥回读异常: ${KEYS:0:120}"
+# W4b. locales 文案覆盖(patch 23 §1.6, 2026-09-25): GET /api/i18n 须含我们的覆盖 key。
+#   防「locales 没进 zip / 采集链断」两类静默回归。**只判存在、不判具体文案值** ——
+#   文案本就是要随需求改的, 判值会让每次改文案都得改判据。前端合并后的 UI 效果需造
+#   含 API 节点的工作流(gate 激活)才能触发, 不并入自动判据; 一次性验证记录见设计文档 §1.6。
+I18N=$(curl -s -m 15 $COMFY/api/i18n 2>/dev/null || echo "")
+echo "$I18N" | python3 -c "
+import sys,json
+try:
+    d=json.loads(sys.stdin.read())
+    for loc in ('zh','en'):
+        v=d.get(loc,{}).get('actionbar',{}).get('partnerRunGate',{}).get('signInToRun','')
+        assert v, f'{loc}.actionbar.partnerRunGate.signInToRun 缺失(覆盖未生效)'
+except Exception as ex: print('BAD', ex)
+else: print('OK')
+" 2>/dev/null | grep -q OK && ok "W4b locales 文案覆盖生效(/api/i18n 含 en+zh 覆盖项)" || bad "W4b locales 覆盖缺失: ${I18N:0:120}"
 
 echo "== [4] 判据 C: 出图 =="
 if [ "$FAST" = 1 ]; then

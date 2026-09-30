@@ -60,6 +60,14 @@ API,输出标准 IMAGE 张量可接原生下游;零新依赖(custom_nodes 目录
 用户图标同一 store,状态自动同步,复用官方 `createCustomer()` 校验)。节点报错文案同步为
 「其他」(官方 zh 译名,原写「其它」会指错路)。patch 23 证据串升 `v2` —— `fetch_externals.sh`
 ③i 段改为落后即先删目录再重刷。详见设计文档 §1.5「入口统一」。
+
+**2026-09-25 partner-gate 文案覆盖**: 账号登录面门控后「登录」这一动作已不存在(实际动作 =
+配置 comfy.org API 密钥), 但 partner-gate 的 6 条文案仍说「登录/账户」。改走**官方给自定义
+节点留的 i18n 扩展点**(`custom_nodes/*/locales/*/main.json` → `GET /api/i18n` → 前端
+`mergeLocaleMessage` 深度合并) —— **零前端改动**, 不重建 dist、不动 pin 三锚, 也不与上游
+locale 文件冲突。patch 23 新增 2 个 locales 文件 ⇒ zip 条目 35928→35930、sorted 锚换
+`df0c4b74`; `verify_smoke.sh` 新增判据 **W4b**(全量 13 项 ALL PASS)。设计与验证见
+`docs/external-api-node-design.md` §1.6(UI 端到端待设备空闲补做)。
 **2026-09-12 实施**:`patches/23-ohos-external-api.patch`(4 个节点文件 + server.py 密钥端点
 hunk, fetch 段 ③i 幂等 apply) + 后端 `GET/POST /ohos/apikeys`(GET 只回掩码,绝不下发明文;
 存储 `<comfyui根>/api_keys.json` 0600) + 前端扩展 `web/api_keys.js`(经 custom node 的
